@@ -8,7 +8,7 @@ My dad's 75 and has decades of recording sessions and jingles on external drives
 
 Pick a source drive. Pick a backup drive. Set a schedule. Done.
 
-The app syncs changes automatically using rsync. If a file gets removed from the source, it moves to an `_archived` folder on the backup instead of disappearing forever.
+The app syncs changes automatically using rsync. If a file gets removed from the source, it moves to an `_archived` folder on the backup instead of disappearing forever. He will delete things accidentally, I know it. But he can always get them back now. And his backup drive is 10tb and his main is like 4. It will never run out of space for these archived files.
 
 Everything lives in a `DadCloner Backup` folder on your destination drive:
 - Mirrored files from source
