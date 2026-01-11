@@ -1,42 +1,69 @@
-# DadCloner
+# DadCloner 👨‍👦💾
 
-I made this because my dad is 75 and I wanted backups that are:
-1) automatic,
-2) hard to screw up,
-3) incapable of deleting the stuff he loves.
+Because "Dad, did you back up your files?" shouldn't be a weekly argument.
 
-It's a tiny macOS menu bar app that clones one external drive to another. No Time Machine. No "choose this, choose that." Just: pick source, pick backup, done.
+## The Origin Story
 
-## What it does
+My dad is 75. He's got decades of jingles, sessions, and memories on hard drives. Time Machine confused him. Cloud backup scared him. Drag-and-drop? He'd forget.
+So I built this: a macOS menu bar app so simple that set-it-and-forget-it isn't a marketing slogan -- it's the entire interface.
+DadCloner does one thing: it clones one drive to another, automatically, without ever deleting anything he cares about.
 
-- Copies only what changed after the first run (thanks, rsync).
-- Never deletes from the backup. If a file disappears from the source, it gets archived on the backup.
-- Puts everything inside a single folder on the backup drive: `DadCloner Backup`.
-- Runs on a schedule and stays out of the way.
+## What It Does ✨
 
-## What it does NOT do
+- Copies only what changed after the first run (rsync under the hood)
+- Never deletes from the backup -- if a file vanishes from the source, it gets archived instead
+- Keeps everything tidy in a single `DadCloner Backup` folder on the destination
+- Runs on schedule and stays out of the way in your menu bar
+- Zero configuration hell -- pick source, pick backup, done
 
-- It won't wipe your source drive. It never writes to the source, and it never uses `--delete`.
-- It won't format disks or change partitions.
+## What It Does NOT Do 🚫
 
-## How it works (plain English)
+- Won't touch your source drive (read-only, always)
+- Won't format or partition anything
+- Won't use `--delete` flags or other scary rsync options
+- Won't judge your dad's folder naming conventions
 
-1. You pick a source drive and a backup drive.
-2. DadCloner creates a folder on the backup drive and syncs everything into it.
-3. Every day at the chosen time, it syncs only what changed.
-4. Anything removed from the source gets moved into an archive folder on the backup instead of being deleted.
+## How It Works (No Jargon Version)
 
-## Why it's simple
+1. You pick a source drive (the one with all the stuff)
+2. You pick a backup drive (the one that should have all the stuff)
+3. DadCloner creates a folder on the backup and syncs everything into it
+4. Every day at your chosen time, it syncs only what changed
+5. If something disappears from the source, it gets archived on the backup, not deleted
 
-Because if it isn't simple, it won't get used. And if it doesn't get used, it's useless.
+Philosophy: If it isn't simple enough for a 75-year-old to trust, it isn't simple enough.
 
-## Build
+## Tech Specs 🔧
 
-- Xcode 15+
-- macOS target per your project settings
+- Built for: macOS (Xcode 15+)
+- Bundled with: rsync 3.2.7 (so it works out-of-the-box, no Homebrew required)
+- Languages: Swift, SwiftUI, and a little bit of shell scripting
+- Complexity: Intentionally minimal
 
-The app bundles rsync 3.2.7 so it works consistently without Homebrew.
+## Why This Exists
 
-## License
+Because backups shouldn't require a PhD in IT. Because losing your life's work to a dead drive is heartbreaking. Because sometimes the best technology is the kind that just works and gets out of the way.
+This is my first public GitHub project. It's not fancy. But it's kept my dad's jingles safe for months, and maybe it'll help your parents too.
 
-Do whatever you want with it. Use it for your parents. Rebuild it into something else. It's all off-the-shelf stuff and zero drama.
+## Build It Yourself
+
+```bash
+git clone https://github.com/mikecerisano/DadCloner.git
+cd DadCloner
+open DadCloner.xcodeproj
+# Build and run in Xcode
+```
+
+## License 📜
+
+Do whatever you want with it.
+Use it for your parents. Rebuild it. Ship it to your grandma. Turn it into a TikTok. I don't care. It's yours.
+Zero drama. Zero strings. Just working software for people you care about.
+
+## Credits
+
+Built with ☕ and mild panic about hard drive mortality by a guy who works in film and needed his dad's archive to survive.
+If this helped you, cool. If you have ideas to make it better, open an issue. If you just want to say hi, that works too.
+
+"The best backup is the one that happens automatically."
+-- Every IT person ever, probably
