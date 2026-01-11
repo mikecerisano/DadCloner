@@ -2,7 +2,7 @@
 
 macOS menu bar app for scheduled drive backups. Never deletes anything from the backup, just archives it when it disappears from the source.
 
-My dad's 75 and has decades of recording sessions and jingles on external drives. He needed backups that would actually happen without him thinking about it, and couldn't risk anything getting deleted. Time Machine was a non-starter. So: this.
+My dad's 75 and has decades of recording sessions and jingles on external drives. He needed backups that would actually happen without him thinking about it, and couldn't risk anything getting deleted. Time Machine was a non-starter. Mac OS 9 was his jam, his dock is longer than war and peace. So, lets keep it dead simple:
 
 ## How it works
 
