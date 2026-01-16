@@ -29,6 +29,12 @@ git clone [repo]
 open DadCloner.xcodeproj
 ```
 
+In Xcode:
+1. Select the **DadCloner** target in the project navigator
+2. Go to **Signing & Capabilities**
+3. Set your **Team** to your Apple Developer account (or Personal Team for local builds)
+4. Build and run
+
 ## License
 
 MIT. Use it for your parents, rebuild it, whatever.

@@ -1,3 +1,33 @@
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode user data
 **/*.xcuserstate
 **/xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+
+# Xcode build
+build/
+DerivedData/
+*.xcarchive
+*.ipa
+
+# Swift Package Manager
+.swiftpm/
+.build/
+Package.resolved
+
+# CocoaPods (if ever used)
+Pods/
+
+# IDE settings
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Development tools
+.claude/
