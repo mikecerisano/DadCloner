@@ -1,18 +1,41 @@
 # DadCloner
 
-macOS menu bar app for scheduled drive backups. Never deletes anything from the backup, just archives it when it disappears from the source.
+<p align="center">
+  <img src="DadCloner/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" width="112" height="112" alt="DadCloner app icon">
+</p>
+
+DadCloner is a tiny macOS menu bar app for automatic external drive backups. It uses `rsync`, remembers the exact source and backup drive UUIDs, and never deletes files from the backup. When something disappears from the source drive, DadCloner moves the backed-up copy into an archive folder instead.
+
+Built for the kind of backup job where the safest restore path is "plug in the drive and browse normal files."
 
 My dad's 75 and has decades of recording sessions and jingles on external drives. He needed backups that would actually happen without him thinking about it, and couldn't risk anything getting deleted. Time Machine was a non-starter. Mac OS 9 was his jam, his dock is longer than War and Peace. So, let's keep it dead simple:
+
+## Download
+
+Download the latest beta from the [GitHub Releases page](https://github.com/mikecerisano/DadCloner/releases).
+
+DadCloner is currently beta software. Test it with non-critical folders or drives before using it for anything irreplaceable.
 
 ## How it works
 
 Pick a source drive. Pick a backup drive. Set a schedule. Done.
 
-The app syncs changes automatically using rsync. If a file gets removed from the source, it moves to a `DadCloner_Archive` folder on the backup instead of disappearing forever. He will delete things accidentally, I know it. But he can always get them back now. And his backup drive is 10 TB and his main is like 4 TB. It will never run out of space for these archived files.
+The app syncs changes automatically using the bundled `rsync` binary. If a file gets removed from the source, the backed-up copy moves to a `DadCloner_Archive` folder on the backup instead of disappearing forever.
 
 Everything lives in a `DadCloner Backup` folder on your destination drive:
 - Mirrored files from source
 - `DadCloner_Archive/` subfolder for anything that got removed
+
+## Features
+
+- Menu bar app for scheduled macOS backups
+- Non-destructive backup behavior: no `--delete`
+- Exact drive matching by volume UUID
+- Free-space preflight before a backup starts
+- Catch-up sync after missed schedules
+- Visible status for mounted drives, running syncs, and failures
+- Notarized Developer ID beta builds
+- Bundled `rsync` 3.2.7; no Homebrew required
 
 ## What it doesn't do
 
@@ -20,6 +43,12 @@ Everything lives in a `DadCloner Backup` folder on your destination drive:
 - Use `--delete` or any other destructive rsync flags
 - Format or partition anything
 - Require you to think about it after setup
+
+## Current limitations
+
+- Apple Silicon only for the public beta because the bundled `rsync` helper is arm64.
+- Not a versioned backup system. It keeps the current mirrored copy plus archived files that disappeared from the source.
+- No cloud sync, encryption, drive formatting, or network backup support.
 
 ## Building
 
@@ -47,7 +76,7 @@ Basic beta checklist:
 xcodebuild -project DadCloner.xcodeproj -scheme DadCloner -configuration Release clean build
 APP="path/to/DadCloner.app"
 IDENTITY="Developer ID Application: Your Name (TEAMID)"
-codesign --force --timestamp --sign "$IDENTITY" "$APP/Contents/Resources/rsync"
+codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP/Contents/Resources/rsync"
 codesign --force --options runtime --timestamp --entitlements DadCloner/DadCloner.entitlements --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 ditto -c -k --keepParent "$APP" DadCloner-0.1-beta.zip
