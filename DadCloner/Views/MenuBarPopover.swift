@@ -180,7 +180,8 @@ struct MenuBarPopover: View {
             driveStatusRow(
                 name: config.backupDriveName.isEmpty ? "Backup Drive" : config.backupDriveName,
                 status: driveMonitor.backupStatus,
-                icon: "externaldrive.badge.checkmark"
+                icon: "externaldrive.badge.checkmark",
+                detail: backupFreeSpaceDescription
             )
 
             // Next scheduled sync
@@ -200,14 +201,36 @@ struct MenuBarPopover: View {
         }
     }
 
-    private func driveStatusRow(name: String, status: DriveValidationResult, icon: String) -> some View {
+    private var backupFreeSpaceDescription: String? {
+        guard config.isConfigured,
+              let volume = driveMonitor.mountedVolumes.first(where: { $0.id == config.backupDriveUUID }) else {
+            return nil
+        }
+
+        return "\(volume.formattedFreeSpace) free"
+    }
+
+    private func driveStatusRow(
+        name: String,
+        status: DriveValidationResult,
+        icon: String,
+        detail: String? = nil
+    ) -> some View {
         HStack {
             Image(systemName: icon)
                 .foregroundColor(status.isValid ? .green : .orange)
                 .frame(width: 20)
 
-            Text(name)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(name)
+                    .lineLimit(1)
+
+                if let detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
 
             Spacer()
 

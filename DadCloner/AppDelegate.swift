@@ -9,6 +9,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var setupWindow: NSWindow?
+    private var statusTimer: Timer?
+    private var notificationObservers: [NSObjectProtocol] = []
 
     private let config = SyncConfiguration.shared
     private let driveMonitor = DriveMonitor.shared
@@ -18,9 +20,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - App Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Request notification permissions
-        requestNotificationPermissions()
-
         // Setup menu bar
         setupMenuBar()
 
@@ -34,10 +33,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Start monitoring drive changes
         startDriveMonitoring()
+        observeAppStatusChanges()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         scheduler.stop()
+        statusTimer?.invalidate()
+        for observer in notificationObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
     // MARK: - Menu Bar Setup
@@ -160,20 +164,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startDriveMonitoring() {
         // Update status icon when drives change
-        Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
             self?.driveMonitor.refreshMountedVolumes()
             self?.updateStatusIcon()
         }
     }
 
-    // MARK: - Notifications
-
-    private func requestNotificationPermissions() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
-            if let error = error {
-                print("Notification permission error: \(error)")
-            }
+    private func observeAppStatusChanges() {
+        let syncObserver = NotificationCenter.default.addObserver(
+            forName: .dadClonerSyncStatusDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateStatusIcon()
         }
+
+        let driveObserver = NotificationCenter.default.addObserver(
+            forName: .dadClonerDriveStatusDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateStatusIcon()
+        }
+
+        notificationObservers.append(syncObserver)
+        notificationObservers.append(driveObserver)
     }
 }
 

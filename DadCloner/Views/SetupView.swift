@@ -66,7 +66,6 @@ struct SetupView: View {
         }
         .onAppear {
             driveMonitor.refreshMountedVolumes()
-            requestNotificationPermission()
         }
     }
 
@@ -576,7 +575,7 @@ struct SetupView: View {
                 return false
             }
             // Only show writable volumes for backup
-            return volume.isWritable
+            return excludingSource ? volume.isWritable : true
         }
     }
 
@@ -596,6 +595,8 @@ struct SetupView: View {
 
         // Finalize (creates marker file and archive directory)
         if config.finalizeConfiguration() {
+            requestNotificationPermission()
+
             // Start the scheduler
             SchedulerManager.shared.start()
 

@@ -164,6 +164,7 @@ final class DriveMonitor {
 
         // Update validation status
         validateDrives()
+        NotificationCenter.default.post(name: .dadClonerDriveStatusDidChange, object: nil)
     }
 
     /// Get UUID for a volume at the given path
@@ -343,37 +344,44 @@ final class DriveMonitor {
 
     // MARK: - Monitoring
 
-    private var workspaceObserver: NSObjectProtocol?
+    private var workspaceObservers: [NSObjectProtocol] = []
 
     /// Start monitoring for volume mount/unmount events
     func startMonitoring() {
         // Watch for volume mount events
-        workspaceObserver = workspace.notificationCenter.addObserver(
+        let mountObserver = workspace.notificationCenter.addObserver(
             forName: NSWorkspace.didMountNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             self?.refreshMountedVolumes()
         }
+        workspaceObservers.append(mountObserver)
 
         // Watch for volume unmount events
-        workspace.notificationCenter.addObserver(
+        let unmountObserver = workspace.notificationCenter.addObserver(
             forName: NSWorkspace.didUnmountNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             self?.refreshMountedVolumes()
         }
+        workspaceObservers.append(unmountObserver)
     }
 
     /// Stop monitoring
     func stopMonitoring() {
-        if let observer = workspaceObserver {
+        for observer in workspaceObservers {
             workspace.notificationCenter.removeObserver(observer)
         }
+        workspaceObservers.removeAll()
     }
 
     deinit {
         stopMonitoring()
     }
+}
+
+extension Notification.Name {
+    static let dadClonerDriveStatusDidChange = Notification.Name("dadClonerDriveStatusDidChange")
 }

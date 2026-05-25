@@ -34,6 +34,15 @@ final class SchedulerManager {
         isScheduleEnabled = true
         scheduleNextSync()
         logger.info("Scheduler started - next sync at \(config.scheduleTimeFormatted)")
+
+        DriveMonitor.shared.refreshMountedVolumes()
+        if config.isBackupOverdue && DriveMonitor.shared.areDrivesReady {
+            logger.info("Backup is overdue and drives are ready; starting catch-up sync")
+            Task { @MainActor in
+                _ = await syncManager.performSync()
+                scheduleNextSync()
+            }
+        }
     }
 
     /// Stop the scheduler

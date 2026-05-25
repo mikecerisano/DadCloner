@@ -48,7 +48,11 @@ final class SyncManager {
     static let shared = SyncManager()
 
     // MARK: - Properties
-    private(set) var status: SyncStatus = .idle
+    private(set) var status: SyncStatus = .idle {
+        didSet {
+            NotificationCenter.default.post(name: .dadClonerSyncStatusDidChange, object: nil)
+        }
+    }
     private(set) var currentProgress: Double = 0
     private(set) var filesProcessed: Int = 0
     private(set) var filesArchived: Int = 0
@@ -98,6 +102,10 @@ final class SyncManager {
         var success = false
 
         do {
+            filesProcessed = 0
+            filesArchived = 0
+            currentFile = ""
+
             // Step 1: Validate drives
             status = .validating
             currentProgress = 0.05
@@ -156,9 +164,10 @@ final class SyncManager {
         // End logging session
         logger.endSession(success: success)
 
-        // Reset state after a delay
-        try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
-        if status == .completed || status.isRunning == false {
+        if success {
+            // Leave the completion state visible briefly, but keep failures visible
+            // until the next manual or scheduled sync so the user can inspect them.
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             status = .idle
             filesProcessed = 0
             filesArchived = 0
@@ -236,7 +245,7 @@ final class SyncManager {
 
         // Get list of files in backup that don't exist in source
         // These are files that were deleted from source and need to be archived
-        let orphanedFiles = try await findOrphanedFiles(
+        let orphanedFiles = try findOrphanedFiles(
             backupPath: backupPath,
             sourcePath: sourcePath
         )
@@ -318,6 +327,8 @@ final class SyncManager {
             }
         }
 
+        removeEmptyOrphanedDirectories(backupPath: backupPath, sourcePath: sourcePath)
+
         // If ANY files failed to archive, ABORT the sync
         // This is critical - we don't want to run rsync if archiving failed
         // because that could lead to confusion about what was/wasn't archived
@@ -333,7 +344,7 @@ final class SyncManager {
     }
 
     /// Find files in backup that don't exist in source
-    private func findOrphanedFiles(backupPath: String, sourcePath: String) async throws -> [String] {
+    private func findOrphanedFiles(backupPath: String, sourcePath: String) throws -> [String] {
         var orphanedFiles: [String] = []
 
         // Skip special system directories and our own files
@@ -396,22 +407,81 @@ final class SyncManager {
             // Check if file exists in source
             // For symlinks, we check if the symlink itself exists, not its target
             let sourceFile = (sourcePath as NSString).appendingPathComponent(relativePath)
-            var sourceExists = false
-
-            if isSymlink {
-                // For symlinks, check if the symlink itself exists (not its target)
-                var isDir: ObjCBool = false
-                sourceExists = fileManager.fileExists(atPath: sourceFile, isDirectory: &isDir)
-            } else {
-                sourceExists = fileManager.fileExists(atPath: sourceFile)
-            }
-
-            if !sourceExists {
+            if !itemExistsIncludingSymlink(atPath: sourceFile) {
                 orphanedFiles.append(relativePath)
             }
         }
 
         return orphanedFiles
+    }
+
+    private func itemExistsIncludingSymlink(atPath path: String) -> Bool {
+        if fileManager.fileExists(atPath: path) {
+            return true
+        }
+
+        return (try? fileManager.destinationOfSymbolicLink(atPath: path)) != nil
+    }
+
+    private func removeEmptyOrphanedDirectories(backupPath: String, sourcePath: String) {
+        guard let enumerator = fileManager.enumerator(
+            at: URL(fileURLWithPath: backupPath),
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: []
+        ) else {
+            return
+        }
+
+        var directories: [String] = []
+
+        for case let fileURL as URL in enumerator {
+            guard let isDirectory = try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory,
+                  isDirectory == true else {
+                continue
+            }
+
+            let fullPath = fileURL.path
+            guard fullPath.hasPrefix(backupPath) else { continue }
+
+            var relativePath = String(fullPath.dropFirst(backupPath.count))
+            if relativePath.hasPrefix("/") {
+                relativePath = String(relativePath.dropFirst())
+            }
+
+            let firstComponent = relativePath.components(separatedBy: "/").first ?? ""
+            let skipPaths: Set<String> = [
+                SyncConfiguration.archiveDirectoryName,
+                SyncConfiguration.backupMarkerFilename,
+                ".DS_Store",
+                ".Spotlight-V100",
+                ".fseventsd",
+                ".Trashes",
+                ".TemporaryItems",
+                ".DocumentRevisions-V100",
+                ".PKInstallSandboxManager-SystemSoftware"
+            ]
+
+            if skipPaths.contains(firstComponent) {
+                enumerator.skipDescendants()
+                continue
+            }
+
+            if !itemExistsIncludingSymlink(atPath: (sourcePath as NSString).appendingPathComponent(relativePath)) {
+                directories.append(fullPath)
+            }
+        }
+
+        for directory in directories.sorted(by: { $0.count > $1.count }) {
+            do {
+                let contents = try fileManager.contentsOfDirectory(atPath: directory)
+                if contents.isEmpty {
+                    try fileManager.removeItem(atPath: directory)
+                    logger.info("Removed empty deleted folder: \(directory)")
+                }
+            } catch {
+                logger.warning("Could not remove empty deleted folder", details: "\(directory): \(error.localizedDescription)")
+            }
+        }
     }
 
     // MARK: - Step 3: Perform Rsync
@@ -423,14 +493,12 @@ final class SyncManager {
         let sourcePath = config.sourceDrivePath.hasSuffix("/") ? config.sourceDrivePath : config.sourceDrivePath + "/"
         let backupPath = config.backupDestinationPath.hasSuffix("/") ? config.backupDestinationPath : config.backupDestinationPath + "/"
 
-        let useOverallProgress = true
-
         // Build rsync command with safety flags
         // CRITICAL: We NEVER use --delete flag
-        var rsyncArgs = [
+        let rsyncArgs = [
             "-av",                      // Archive mode, verbose
-            "--update",                 // Skip files newer on destination
             "--itemize-changes",        // Show what's being changed
+            "--info=progress2",         // Emit overall progress for large transfers
             "--exclude", SyncConfiguration.archiveDirectoryName,
             "--exclude", SyncConfiguration.backupMarkerFilename,
             "--exclude", ".DS_Store",
@@ -441,16 +509,11 @@ final class SyncManager {
             sourcePath,
             backupPath
         ]
-        if useOverallProgress {
-            rsyncArgs.insert("--info=progress2", at: 3)
-        } else {
-            rsyncArgs.insert("--progress", at: 3)
-        }
 
         logger.info("Running: rsync \(rsyncArgs.joined(separator: " "))")
 
-        // First, do a dry run to count files
-        let dryRunArgs = ["--dry-run"] + rsyncArgs
+        // First, do a dry run to count files and estimate transfer size.
+        let dryRunArgs = ["--dry-run", "--stats"] + rsyncArgs
         let dryRunResult = try await runProcess(executable: rsyncPath, arguments: dryRunArgs)
 
         if dryRunResult.exitCode != 0 {
@@ -470,6 +533,8 @@ final class SyncManager {
             return
         }
 
+        try validateAvailableSpace(forDryRunOutput: dryRunResult.stdout)
+
         // Now do the actual sync
         filesProcessed = 0
         let result = try await runProcess(
@@ -478,13 +543,13 @@ final class SyncManager {
             stdoutLineHandler: { [weak self] line in
                 guard let self = self else { return }
                 Task { @MainActor in
-                    self.handleRsyncOutputLine(line, totalFiles: fileCount, useOverallProgress: useOverallProgress)
+                    self.handleRsyncOutputLine(line)
                 }
             },
             stderrLineHandler: { [weak self] line in
                 guard let self = self else { return }
                 Task { @MainActor in
-                    self.handleRsyncOutputLine(line, totalFiles: fileCount, useOverallProgress: useOverallProgress)
+                    self.handleRsyncOutputLine(line)
                 }
             }
         )
@@ -494,6 +559,58 @@ final class SyncManager {
         }
 
         logger.success("rsync complete: \(filesProcessed) file(s) synced")
+    }
+
+    private func validateAvailableSpace(forDryRunOutput output: String) throws {
+        guard let requiredBytes = parseTransferredFileSize(from: output),
+              requiredBytes > 0 else {
+            logger.warning("Could not estimate transfer size from dry run; continuing")
+            return
+        }
+
+        let availableBytes = try availableDiskSpace(atPath: config.backupDrivePath)
+        let safetyBuffer = max(requiredBytes / 10, 512 * 1024 * 1024)
+        let neededBytes = requiredBytes + safetyBuffer
+
+        logger.info(
+            "Space check: \(formatBytes(requiredBytes)) to transfer, \(formatBytes(availableBytes)) available"
+        )
+
+        guard availableBytes >= neededBytes else {
+            throw SyncError.insufficientSpace(
+                "Need about \(formatBytes(neededBytes)) free, but only \(formatBytes(availableBytes)) is available on \(config.backupDriveName)."
+            )
+        }
+    }
+
+    private func availableDiskSpace(atPath path: String) throws -> Int64 {
+        let attributes = try fileManager.attributesOfFileSystem(forPath: path)
+        guard let freeSpace = attributes[.systemFreeSize] as? NSNumber else {
+            throw SyncError.insufficientSpace("Could not determine free space on backup drive.")
+        }
+        return freeSpace.int64Value
+    }
+
+    private func parseTransferredFileSize(from output: String) -> Int64? {
+        for line in output.components(separatedBy: .newlines) {
+            let lowercasedLine = line.lowercased()
+            guard lowercasedLine.contains("total transferred file size:") else {
+                continue
+            }
+
+            guard let valuePart = line.split(separator: ":", maxSplits: 1).last else {
+                return nil
+            }
+
+            let digits = valuePart.filter { $0.isNumber }
+            return Int64(String(digits))
+        }
+
+        return nil
+    }
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
     // MARK: - Step 4: Verify
@@ -531,76 +648,16 @@ final class SyncManager {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
-        let ioQueue = DispatchQueue(label: "com.dadcloner.process.io")
-        var stdoutData = Data()
-        var stderrData = Data()
-        var stdoutBuffer = ""
-        var stderrBuffer = ""
-
-        func drainStdoutBuffer(final: Bool) {
-            while let range = stdoutBuffer.range(of: "\n") {
-                let line = String(stdoutBuffer[..<range.lowerBound])
-                stdoutBuffer.removeSubrange(..<range.upperBound)
-                if let handler = stdoutLineHandler {
-                    DispatchQueue.main.async {
-                        handler(line)
-                    }
-                }
-            }
-            if final && !stdoutBuffer.isEmpty {
-                let line = stdoutBuffer
-                stdoutBuffer = ""
-                if let handler = stdoutLineHandler {
-                    DispatchQueue.main.async {
-                        handler(line)
-                    }
-                }
-            }
-        }
-
-        func drainStderrBuffer(final: Bool) {
-            while let range = stderrBuffer.range(of: "\n") {
-                let line = String(stderrBuffer[..<range.lowerBound])
-                stderrBuffer.removeSubrange(..<range.upperBound)
-                if let handler = stderrLineHandler {
-                    DispatchQueue.main.async {
-                        handler(line)
-                    }
-                }
-            }
-            if final && !stderrBuffer.isEmpty {
-                let line = stderrBuffer
-                stderrBuffer = ""
-                if let handler = stderrLineHandler {
-                    DispatchQueue.main.async {
-                        handler(line)
-                    }
-                }
-            }
-        }
+        let outputCollector = ProcessOutputCollector()
 
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if data.isEmpty { return }
-            ioQueue.sync {
-                stdoutData.append(data)
-                if let chunk = String(data: data, encoding: .utf8) {
-                    stdoutBuffer += chunk
-                    drainStdoutBuffer(final: false)
-                }
-            }
+            outputCollector.appendStdout(data, handler: stdoutLineHandler)
         }
 
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if data.isEmpty { return }
-            ioQueue.sync {
-                stderrData.append(data)
-                if let chunk = String(data: data, encoding: .utf8) {
-                    stderrBuffer += chunk
-                    drainStderrBuffer(final: false)
-                }
-            }
+            outputCollector.appendStderr(data, handler: stderrLineHandler)
         }
 
         return try await withCheckedThrowingContinuation { continuation in
@@ -608,28 +665,14 @@ final class SyncManager {
                 stdoutPipe.fileHandleForReading.readabilityHandler = nil
                 stderrPipe.fileHandleForReading.readabilityHandler = nil
 
-                ioQueue.sync {
-                    let remainingStdout = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                    let remainingStderr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                    if !remainingStdout.isEmpty {
-                        stdoutData.append(remainingStdout)
-                        if let chunk = String(data: remainingStdout, encoding: .utf8) {
-                            stdoutBuffer += chunk
-                        }
-                    }
-                    if !remainingStderr.isEmpty {
-                        stderrData.append(remainingStderr)
-                        if let chunk = String(data: remainingStderr, encoding: .utf8) {
-                            stderrBuffer += chunk
-                        }
-                    }
-                    drainStdoutBuffer(final: true)
-                    drainStderrBuffer(final: true)
-                }
+                let output = outputCollector.finish(
+                    stdoutPipe: stdoutPipe,
+                    stderrPipe: stderrPipe,
+                    stdoutLineHandler: stdoutLineHandler,
+                    stderrLineHandler: stderrLineHandler
+                )
 
-                let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
-                let stderr = String(data: stderrData, encoding: .utf8) ?? ""
-                continuation.resume(returning: (process.terminationStatus, stdout, stderr))
+                continuation.resume(returning: (process.terminationStatus, output.stdout, output.stderr))
             }
 
             do {
@@ -643,8 +686,8 @@ final class SyncManager {
     }
 
     @MainActor
-    private func handleRsyncOutputLine(_ line: String, totalFiles: Int, useOverallProgress: Bool) {
-        if useOverallProgress, let percent = parseRsyncProgressPercent(from: line) {
+    private func handleRsyncOutputLine(_ line: String) {
+        if let percent = parseRsyncProgressPercent(from: line) {
             let start = 0.3
             let end = 0.9
             let mapped = start + (end - start) * min(max(percent, 0.0), 1.0)
@@ -657,14 +700,6 @@ final class SyncManager {
         guard isRsyncFileLine(line) else { return }
         filesProcessed += 1
         currentFile = extractRsyncFilename(from: line)
-
-        if !useOverallProgress {
-            let clampedTotal = max(totalFiles, 1)
-            let fraction = min(Double(filesProcessed) / Double(clampedTotal), 1.0)
-            let start = 0.3
-            let end = 0.9
-            currentProgress = start + (end - start) * fraction
-        }
     }
 
     private func isRsyncFileLine(_ line: String) -> Bool {
@@ -744,7 +779,8 @@ final class SyncManager {
             _ = try? await center.requestAuthorization(options: [.alert, .sound])
         }
 
-        guard settings.authorizationStatus == .authorized else { return }
+        let updatedSettings = await center.notificationSettings()
+        guard updatedSettings.authorizationStatus == .authorized else { return }
 
         let content = UNMutableNotificationContent()
         content.title = title
@@ -761,6 +797,105 @@ final class SyncManager {
     }
 }
 
+extension Notification.Name {
+    static let dadClonerSyncStatusDidChange = Notification.Name("dadClonerSyncStatusDidChange")
+}
+
+private final class ProcessOutputCollector {
+    private let queue = DispatchQueue(label: "com.dadcloner.process.io")
+    private var stdoutData = Data()
+    private var stderrData = Data()
+    private var stdoutBuffer = ""
+    private var stderrBuffer = ""
+
+    func appendStdout(_ data: Data, handler: ((String) -> Void)?) {
+        guard !data.isEmpty else { return }
+        queue.sync {
+            stdoutData.append(data)
+            if let chunk = String(data: data, encoding: .utf8) {
+                stdoutBuffer += chunk
+                drainStdoutBuffer(final: false, handler: handler)
+            }
+        }
+    }
+
+    func appendStderr(_ data: Data, handler: ((String) -> Void)?) {
+        guard !data.isEmpty else { return }
+        queue.sync {
+            stderrData.append(data)
+            if let chunk = String(data: data, encoding: .utf8) {
+                stderrBuffer += chunk
+                drainStderrBuffer(final: false, handler: handler)
+            }
+        }
+    }
+
+    func finish(
+        stdoutPipe: Pipe,
+        stderrPipe: Pipe,
+        stdoutLineHandler: ((String) -> Void)?,
+        stderrLineHandler: ((String) -> Void)?
+    ) -> (stdout: String, stderr: String) {
+        queue.sync {
+            let remainingStdout = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+            let remainingStderr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+
+            stdoutData.append(remainingStdout)
+            stderrData.append(remainingStderr)
+
+            if let chunk = String(data: remainingStdout, encoding: .utf8) {
+                stdoutBuffer += chunk
+            }
+            if let chunk = String(data: remainingStderr, encoding: .utf8) {
+                stderrBuffer += chunk
+            }
+
+            drainStdoutBuffer(final: true, handler: stdoutLineHandler)
+            drainStderrBuffer(final: true, handler: stderrLineHandler)
+
+            return (
+                stdout: String(data: stdoutData, encoding: .utf8) ?? "",
+                stderr: String(data: stderrData, encoding: .utf8) ?? ""
+            )
+        }
+    }
+
+    private func drainStdoutBuffer(final: Bool, handler: ((String) -> Void)?) {
+        while let range = stdoutBuffer.range(of: "\n") {
+            let line = String(stdoutBuffer[..<range.lowerBound])
+            stdoutBuffer.removeSubrange(..<range.upperBound)
+            emit(line, handler: handler)
+        }
+
+        if final && !stdoutBuffer.isEmpty {
+            let line = stdoutBuffer
+            stdoutBuffer = ""
+            emit(line, handler: handler)
+        }
+    }
+
+    private func drainStderrBuffer(final: Bool, handler: ((String) -> Void)?) {
+        while let range = stderrBuffer.range(of: "\n") {
+            let line = String(stderrBuffer[..<range.lowerBound])
+            stderrBuffer.removeSubrange(..<range.upperBound)
+            emit(line, handler: handler)
+        }
+
+        if final && !stderrBuffer.isEmpty {
+            let line = stderrBuffer
+            stderrBuffer = ""
+            emit(line, handler: handler)
+        }
+    }
+
+    private func emit(_ line: String, handler: ((String) -> Void)?) {
+        guard let handler else { return }
+        DispatchQueue.main.async {
+            handler(line)
+        }
+    }
+}
+
 // MARK: - Error Types
 
 enum SyncError: LocalizedError {
@@ -769,6 +904,7 @@ enum SyncError: LocalizedError {
     case archiveFailed(String)
     case rsyncFailed(String)
     case verificationFailed(String)
+    case insufficientSpace(String)
     case lockFailed
 
     var errorDescription: String? {
@@ -783,6 +919,8 @@ enum SyncError: LocalizedError {
             return "Sync error: \(message)"
         case .verificationFailed(let message):
             return "Verification error: \(message)"
+        case .insufficientSpace(let message):
+            return "Backup drive is low on space: \(message)"
         case .lockFailed:
             return "Could not acquire sync lock"
         }
