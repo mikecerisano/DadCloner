@@ -75,6 +75,83 @@ func drawDrive(in rect: CGRect, side: CGFloat, fill: NSColor, stroke: NSColor, a
     indicator.fill()
 }
 
+func drawHardDrive(in rect: CGRect, side: CGFloat) {
+    let shadow = NSShadow()
+    shadow.shadowBlurRadius = scaled(34, for: side)
+    shadow.shadowOffset = CGSize(width: 0, height: -scaled(18, for: side))
+    shadow.shadowColor = NSColor.black.withAlphaComponent(0.30)
+    shadow.set()
+
+    let body = roundedRect(rect, radius: scaled(74, for: side))
+    let bodyGradient = NSGradient(colors: [
+        NSColor(red: 0.08, green: 0.14, blue: 0.20, alpha: 1.0),
+        NSColor(red: 0.09, green: 0.36, blue: 0.43, alpha: 1.0)
+    ])!
+    bodyGradient.draw(in: body, angle: 290)
+
+    NSShadow().set()
+
+    NSColor.white.withAlphaComponent(0.28).setStroke()
+    body.lineWidth = scaled(10, for: side)
+    body.stroke()
+
+    let inner = roundedRect(rect.insetBy(dx: scaled(28, for: side), dy: scaled(28, for: side)), radius: scaled(50, for: side))
+    NSColor.white.withAlphaComponent(0.10).setStroke()
+    inner.lineWidth = scaled(5, for: side)
+    inner.stroke()
+
+    let slot = roundedRect(
+        CGRect(
+            x: rect.minX + rect.width * 0.20,
+            y: rect.maxY - rect.height * 0.26,
+            width: rect.width * 0.60,
+            height: scaled(34, for: side)
+        ),
+        radius: scaled(17, for: side)
+    )
+    NSColor.white.withAlphaComponent(0.55).setFill()
+    slot.fill()
+
+    let foot = roundedRect(
+        CGRect(
+            x: rect.minX + rect.width * 0.20,
+            y: rect.minY + rect.height * 0.17,
+            width: rect.width * 0.38,
+            height: scaled(24, for: side)
+        ),
+        radius: scaled(12, for: side)
+    )
+    NSColor.black.withAlphaComponent(0.20).setFill()
+    foot.fill()
+
+    let led = NSBezierPath(ovalIn: CGRect(
+        x: rect.maxX - rect.width * 0.27,
+        y: rect.minY + rect.height * 0.16,
+        width: scaled(54, for: side),
+        height: scaled(54, for: side)
+    ))
+    NSColor(red: 0.70, green: 1.00, blue: 0.36, alpha: 1.0).setFill()
+    led.fill()
+}
+
+func drawEmoji(_ scalar: UInt32, in rect: CGRect, side: CGFloat) {
+    guard let unicode = UnicodeScalar(scalar) else {
+        return
+    }
+
+    let emoji = String(unicode) as NSString
+    let font = NSFont(name: "Apple Color Emoji", size: rect.height * 0.88)
+        ?? NSFont.systemFont(ofSize: rect.height * 0.88)
+    let attributes: [NSAttributedString.Key: Any] = [.font: font]
+    let textSize = emoji.size(withAttributes: attributes)
+    let drawPoint = CGPoint(
+        x: rect.midX - textSize.width / 2,
+        y: rect.midY - textSize.height / 2 + scaled(4, for: side)
+    )
+
+    emoji.draw(at: drawPoint, withAttributes: attributes)
+}
+
 func drawIcon(side: Int) -> NSBitmapImageRep {
     let side = CGFloat(side)
     guard let bitmap = NSBitmapImageRep(
@@ -103,68 +180,84 @@ func drawIcon(side: Int) -> NSBitmapImageRep {
 
     let background = roundedRect(bounds.insetBy(dx: scaled(52, for: side), dy: scaled(52, for: side)), radius: scaled(220, for: side))
     let gradient = NSGradient(colors: [
-        NSColor(red: 0.06, green: 0.10, blue: 0.16, alpha: 1.0),
-        NSColor(red: 0.08, green: 0.18, blue: 0.24, alpha: 1.0),
-        NSColor(red: 0.03, green: 0.31, blue: 0.36, alpha: 1.0)
+        NSColor(red: 1.00, green: 0.91, blue: 0.72, alpha: 1.0),
+        NSColor(red: 0.76, green: 0.91, blue: 0.91, alpha: 1.0),
+        NSColor(red: 0.18, green: 0.50, blue: 0.56, alpha: 1.0)
     ])!
-    gradient.draw(in: background, angle: 305)
+    gradient.draw(in: background, angle: 315)
 
-    NSColor(red: 0.84, green: 0.95, blue: 1.0, alpha: 0.22).setStroke()
-    background.lineWidth = scaled(7, for: side)
+    NSColor.white.withAlphaComponent(0.55).setStroke()
+    background.lineWidth = scaled(8, for: side)
     background.stroke()
 
-    let backDrive = CGRect(
-        x: scaled(520, for: side),
-        y: scaled(268, for: side),
-        width: scaled(270, for: side),
-        height: scaled(438, for: side)
-    )
-    let frontDrive = CGRect(
-        x: scaled(235, for: side),
-        y: scaled(318, for: side),
-        width: scaled(270, for: side),
-        height: scaled(438, for: side)
+    let haloShadow = NSShadow()
+    haloShadow.shadowBlurRadius = scaled(24, for: side)
+    haloShadow.shadowOffset = CGSize(width: 0, height: -scaled(10, for: side))
+    haloShadow.shadowColor = NSColor.black.withAlphaComponent(0.22)
+    haloShadow.set()
+
+    let emojiHalo = NSBezierPath(ovalIn: CGRect(
+        x: scaled(114, for: side),
+        y: scaled(430, for: side),
+        width: scaled(444, for: side),
+        height: scaled(444, for: side)
+    ))
+    NSColor.white.withAlphaComponent(0.74).setFill()
+    emojiHalo.fill()
+    NSShadow().set()
+
+    drawEmoji(
+        0x1F474,
+        in: CGRect(
+            x: scaled(132, for: side),
+            y: scaled(454, for: side),
+            width: scaled(408, for: side),
+            height: scaled(408, for: side)
+        ),
+        side: side
     )
 
-    drawDrive(
-        in: backDrive,
-        side: side,
-        fill: NSColor(red: 0.10, green: 0.57, blue: 0.68, alpha: 1.0),
-        stroke: NSColor(red: 0.79, green: 0.96, blue: 1.0, alpha: 0.70),
-        accent: NSColor(red: 0.75, green: 1.00, blue: 0.50, alpha: 1.0)
+    let driveRect = CGRect(
+        x: scaled(360, for: side),
+        y: scaled(185, for: side),
+        width: scaled(500, for: side),
+        height: scaled(365, for: side)
     )
-    drawDrive(
-        in: frontDrive,
-        side: side,
-        fill: NSColor(red: 0.91, green: 0.96, blue: 0.98, alpha: 1.0),
-        stroke: NSColor(red: 1.00, green: 1.00, blue: 1.00, alpha: 0.86),
-        accent: NSColor(red: 0.05, green: 0.62, blue: 0.69, alpha: 1.0)
-    )
+    drawHardDrive(in: driveRect, side: side)
 
-    let arrowColor = NSColor(red: 0.74, green: 1.00, blue: 0.34, alpha: 1.0)
-    drawLine(
-        from: CGPoint(x: scaled(450, for: side), y: scaled(516, for: side)),
-        to: CGPoint(x: scaled(615, for: side), y: scaled(516, for: side)),
-        width: scaled(54, for: side),
-        color: NSColor.black.withAlphaComponent(0.24)
+    let cable = NSBezierPath()
+    cable.move(to: CGPoint(x: scaled(435, for: side), y: scaled(430, for: side)))
+    cable.curve(
+        to: CGPoint(x: scaled(518, for: side), y: scaled(500, for: side)),
+        controlPoint1: CGPoint(x: scaled(465, for: side), y: scaled(435, for: side)),
+        controlPoint2: CGPoint(x: scaled(490, for: side), y: scaled(476, for: side))
     )
-    drawLine(
-        from: CGPoint(x: scaled(445, for: side), y: scaled(532, for: side)),
-        to: CGPoint(x: scaled(625, for: side), y: scaled(532, for: side)),
-        width: scaled(48, for: side),
-        color: arrowColor
-    )
-    drawArrowHead(at: CGPoint(x: scaled(650, for: side), y: scaled(532, for: side)), angle: 0, side: side, color: arrowColor)
+    cable.lineWidth = scaled(28, for: side)
+    cable.lineCapStyle = .round
+    NSColor.white.withAlphaComponent(0.68).setStroke()
+    cable.stroke()
 
     if side >= 128 {
+        let badge = NSBezierPath(ovalIn: CGRect(
+            x: scaled(138, for: side),
+            y: scaled(168, for: side),
+            width: scaled(190, for: side),
+            height: scaled(190, for: side)
+        ))
+        NSColor.white.withAlphaComponent(0.88).setFill()
+        badge.fill()
+        NSColor.black.withAlphaComponent(0.08).setStroke()
+        badge.lineWidth = scaled(5, for: side)
+        badge.stroke()
+
         let check = NSBezierPath()
-        check.move(to: CGPoint(x: scaled(364, for: side), y: scaled(260, for: side)))
-        check.line(to: CGPoint(x: scaled(438, for: side), y: scaled(195, for: side)))
-        check.line(to: CGPoint(x: scaled(562, for: side), y: scaled(334, for: side)))
-        check.lineWidth = scaled(38, for: side)
+        check.move(to: CGPoint(x: scaled(184, for: side), y: scaled(268, for: side)))
+        check.line(to: CGPoint(x: scaled(236, for: side), y: scaled(222, for: side)))
+        check.line(to: CGPoint(x: scaled(302, for: side), y: scaled(306, for: side)))
+        check.lineWidth = scaled(34, for: side)
         check.lineCapStyle = .round
         check.lineJoinStyle = .round
-        NSColor.white.withAlphaComponent(0.92).setStroke()
+        NSColor(red: 0.72, green: 1.00, blue: 0.30, alpha: 1.0).setStroke()
         check.stroke()
     }
 
