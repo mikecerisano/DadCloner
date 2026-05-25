@@ -1,7 +1,7 @@
 # DadCloner
 
 <p align="center">
-  <img src="DadCloner/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" width="112" height="112" alt="DadCloner app icon">
+  <img src="docs/dadcloner-icon-readme.png" width="112" height="112" alt="DadCloner app icon">
 </p>
 
 DadCloner is a tiny macOS menu bar app for automatic external drive backups. It uses `rsync`, remembers the exact source and backup drive UUIDs, and never deletes files from the backup. When something disappears from the source drive, DadCloner moves the backed-up copy into an archive folder instead.
