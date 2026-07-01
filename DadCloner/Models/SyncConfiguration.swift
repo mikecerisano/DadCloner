@@ -24,6 +24,7 @@ final class SyncConfiguration {
         static let lastSyncAttemptDate = "dadcloner.lastSyncAttemptDate"
         static let lastSyncSuccess = "dadcloner.lastSyncSuccess"
         static let lastSyncError = "dadcloner.lastSyncError"
+        static let isSchedulePaused = "dadcloner.isSchedulePaused"
     }
 
     // MARK: - Backup Marker
@@ -117,6 +118,12 @@ final class SyncConfiguration {
     var lastSyncError: String? {
         get { UserDefaults.standard.string(forKey: Keys.lastSyncError) }
         set { UserDefaults.standard.set(newValue, forKey: Keys.lastSyncError) }
+    }
+
+    /// Whether automatic backups are paused (manual Backup Now still works)
+    var isSchedulePaused: Bool {
+        get { UserDefaults.standard.bool(forKey: Keys.isSchedulePaused) }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.isSchedulePaused) }
     }
 
     // MARK: - Computed Properties
@@ -276,7 +283,8 @@ final class SyncConfiguration {
             Keys.lastSyncDate,
             Keys.lastSyncAttemptDate,
             Keys.lastSyncSuccess,
-            Keys.lastSyncError
+            Keys.lastSyncError,
+            Keys.isSchedulePaused
         ]
 
         for key in keys {

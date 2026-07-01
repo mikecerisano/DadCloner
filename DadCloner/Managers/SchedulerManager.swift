@@ -39,6 +39,11 @@ final class SchedulerManager {
             return
         }
 
+        guard !config.isSchedulePaused else {
+            logger.info("Scheduler not started - automatic backups are paused")
+            return
+        }
+
         isScheduleEnabled = true
         updateNextScheduledSync()
         startTickTimer()
@@ -67,6 +72,16 @@ final class SchedulerManager {
         config.scheduleMinute = minute
         updateNextScheduledSync()
         logger.info("Schedule updated to \(config.scheduleTimeFormatted)")
+    }
+
+    /// Pause or resume automatic backups. Manual syncs are unaffected.
+    func setPaused(_ paused: Bool) {
+        config.isSchedulePaused = paused
+        if paused {
+            stop()
+        } else {
+            start()
+        }
     }
 
     // MARK: - Scheduling Logic
@@ -176,6 +191,10 @@ final class SchedulerManager {
 
     /// Human-readable description of next sync time
     var nextSyncDescription: String {
+        if config.isSchedulePaused {
+            return "Paused"
+        }
+
         guard let next = nextScheduledSync else {
             return "Not scheduled"
         }
