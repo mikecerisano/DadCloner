@@ -1,7 +1,13 @@
 import Foundation
+import AppKit
 import UserNotifications
 
-/// Manages scheduled daily backups
+/// Manages scheduled daily backups.
+///
+/// Uses a repeating once-a-minute tick that fires the sync when the scheduled
+/// time has passed, rather than a one-shot timer aimed at the exact moment.
+/// A timer can't wake a sleeping Mac, so the tick plus a wake observer means
+/// a backup missed during sleep starts as soon as the Mac wakes.
 @Observable
 final class SchedulerManager {
 
@@ -12,7 +18,8 @@ final class SchedulerManager {
     private(set) var isScheduleEnabled: Bool = true
     private(set) var nextScheduledSync: Date?
 
-    private var timer: Timer?
+    private var tickTimer: Timer?
+    private var wakeObserver: NSObjectProtocol?
     private let config = SyncConfiguration.shared
     private let syncManager = SyncManager.shared
     private let logger = SyncLogger.shared
@@ -32,23 +39,22 @@ final class SchedulerManager {
         }
 
         isScheduleEnabled = true
-        scheduleNextSync()
+        updateNextScheduledSync()
+        startTickTimer()
+        observeWake()
         logger.info("Scheduler started - next sync at \(config.scheduleTimeFormatted)")
 
-        DriveMonitor.shared.refreshMountedVolumes()
-        if config.isBackupOverdue && DriveMonitor.shared.areDrivesReady {
-            logger.info("Backup is overdue and drives are ready; starting catch-up sync")
-            Task { @MainActor in
-                _ = await syncManager.performSync()
-                scheduleNextSync()
-            }
-        }
+        runCatchUpIfNeeded(reason: "app launch")
     }
 
     /// Stop the scheduler
     func stop() {
-        timer?.invalidate()
-        timer = nil
+        tickTimer?.invalidate()
+        tickTimer = nil
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
+        }
         isScheduleEnabled = false
         nextScheduledSync = nil
         logger.info("Scheduler stopped")
@@ -58,78 +64,64 @@ final class SchedulerManager {
     func updateSchedule(hour: Int, minute: Int) {
         config.scheduleHour = hour
         config.scheduleMinute = minute
-
-        // Reschedule if active
-        if isScheduleEnabled {
-            scheduleNextSync()
-        }
-
         updateNextScheduledSync()
         logger.info("Schedule updated to \(config.scheduleTimeFormatted)")
     }
 
     // MARK: - Scheduling Logic
 
-    private func scheduleNextSync() {
-        // Cancel existing timer
-        timer?.invalidate()
+    private func startTickTimer() {
+        tickTimer?.invalidate()
 
-        // Calculate next sync time
-        guard let nextSync = calculateNextSyncTime() else {
-            logger.error("Could not calculate next sync time")
-            return
+        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            self?.tick()
         }
-
-        nextScheduledSync = nextSync
-
-        // Create timer
-        let interval = nextSync.timeIntervalSinceNow
-        guard interval > 0 else {
-            // If time has passed today, schedule for tomorrow
-            if let tomorrowSync = calculateNextSyncTime(forTomorrow: true) {
-                nextScheduledSync = tomorrowSync
-                let tomorrowInterval = tomorrowSync.timeIntervalSinceNow
-                timer = Timer.scheduledTimer(withTimeInterval: tomorrowInterval, repeats: false) { [weak self] _ in
-                    self?.performScheduledSync()
-                }
-            }
-            return
-        }
-
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
-            self?.performScheduledSync()
-        }
-
-        // Make sure timer runs even when menu is open
-        RunLoop.main.add(timer!, forMode: .common)
+        timer.tolerance = 10
+        // .common so the timer keeps firing while the menu bar popover is open
+        RunLoop.main.add(timer, forMode: .common)
+        tickTimer = timer
     }
 
-    private func calculateNextSyncTime(forTomorrow: Bool = false) -> Date? {
-        var components = DateComponents()
+    private func observeWake() {
+        guard wakeObserver == nil else { return }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.logger.info("Mac woke from sleep - checking backup schedule")
+            self?.tick()
+        }
+    }
+
+    private func tick() {
+        guard isScheduleEnabled, config.isConfigured else { return }
+
+        guard let next = nextScheduledSync else {
+            updateNextScheduledSync()
+            return
+        }
+
+        if Date() >= next {
+            performScheduledSync()
+        } else {
+            runCatchUpIfNeeded(reason: "overdue backup")
+        }
+    }
+
+    /// The next time the configured schedule occurs strictly after `date`.
+    private func nextOccurrence(after date: Date) -> Date? {
+        let calendar = Calendar.current
+        var components = calendar.dateComponents([.year, .month, .day], from: date)
         components.hour = config.scheduleHour
         components.minute = config.scheduleMinute
         components.second = 0
 
-        let calendar = Calendar.current
-
-        if forTomorrow {
-            // Get tomorrow's date
-            guard let tomorrow = calendar.date(byAdding: .day, value: 1, to: Date()) else {
-                return nil
-            }
-            let tomorrowComponents = calendar.dateComponents([.year, .month, .day], from: tomorrow)
-            components.year = tomorrowComponents.year
-            components.month = tomorrowComponents.month
-            components.day = tomorrowComponents.day
-        } else {
-            // Get today's date
-            let todayComponents = calendar.dateComponents([.year, .month, .day], from: Date())
-            components.year = todayComponents.year
-            components.month = todayComponents.month
-            components.day = todayComponents.day
+        guard let today = calendar.date(from: components) else { return nil }
+        if today > date {
+            return today
         }
-
-        return calendar.date(from: components)
+        return calendar.date(byAdding: .day, value: 1, to: today)
     }
 
     private func updateNextScheduledSync() {
@@ -137,19 +129,16 @@ final class SchedulerManager {
             nextScheduledSync = nil
             return
         }
-
-        if let next = calculateNextSyncTime() {
-            if next.timeIntervalSinceNow > 0 {
-                nextScheduledSync = next
-            } else {
-                nextScheduledSync = calculateNextSyncTime(forTomorrow: true)
-            }
-        }
+        nextScheduledSync = nextOccurrence(after: Date())
     }
 
     // MARK: - Sync Execution
 
     private func performScheduledSync() {
+        // Advance the schedule first so ticks during the sync don't refire
+        nextScheduledSync = nextOccurrence(after: Date())
+
+        guard !syncManager.status.isRunning else { return }
         logger.info("Starting scheduled sync...")
 
         Task { @MainActor in
@@ -160,9 +149,21 @@ final class SchedulerManager {
             } else {
                 logger.error("Scheduled sync failed")
             }
+        }
+    }
 
-            // Schedule next sync
-            scheduleNextSync()
+    /// Run a sync now if the backup is overdue, the drives are ready, and we
+    /// haven't attempted one within the last hour (see `shouldAttemptCatchUpSync`).
+    private func runCatchUpIfNeeded(reason: String) {
+        guard isScheduleEnabled, config.isConfigured else { return }
+        guard !syncManager.status.isRunning else { return }
+
+        DriveMonitor.shared.refreshMountedVolumes()
+        guard config.shouldAttemptCatchUpSync, DriveMonitor.shared.areDrivesReady else { return }
+
+        logger.info("Backup is overdue and drives are ready; starting catch-up sync (\(reason))")
+        Task { @MainActor in
+            _ = await syncManager.performSync()
         }
     }
 

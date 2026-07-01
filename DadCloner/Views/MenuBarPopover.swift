@@ -46,6 +46,8 @@ struct MenuBarPopover: View {
 
     @State private var showingLog = false
     @State private var showingResetConfirmation = false
+    @State private var isOptionKeyHeld = false
+    @State private var flagsMonitor: Any?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -78,6 +80,17 @@ struct MenuBarPopover: View {
         .onAppear {
             Task {
                 await refreshNotificationStatus()
+            }
+            isOptionKeyHeld = NSEvent.modifierFlags.contains(.option)
+            flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                isOptionKeyHeld = event.modifierFlags.contains(.option)
+                return event
+            }
+        }
+        .onDisappear {
+            if let flagsMonitor {
+                NSEvent.removeMonitor(flagsMonitor)
+                self.flagsMonitor = nil
             }
         }
         .confirmationDialog(
@@ -346,13 +359,15 @@ struct MenuBarPopover: View {
 
                 Spacer()
 
-                // Hidden reset option (hold Option key)
-                Button(action: { showingResetConfirmation = true }) {
-                    Text("Reset")
-                        .font(.caption)
+                // Hidden reset option - only visible while Option is held
+                if isOptionKeyHeld {
+                    Button(action: { showingResetConfirmation = true }) {
+                        Text("Reset")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
                 }
-                .buttonStyle(.plain)
-                .foregroundColor(.secondary)
             }
         }
     }

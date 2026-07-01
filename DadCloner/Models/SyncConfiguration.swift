@@ -20,6 +20,7 @@ final class SyncConfiguration {
         static let scheduleHour = "dadcloner.scheduleHour"
         static let scheduleMinute = "dadcloner.scheduleMinute"
         static let lastSyncDate = "dadcloner.lastSyncDate"
+        static let lastSyncAttemptDate = "dadcloner.lastSyncAttemptDate"
         static let lastSyncSuccess = "dadcloner.lastSyncSuccess"
     }
 
@@ -92,10 +93,16 @@ final class SyncConfiguration {
         set { UserDefaults.standard.set(newValue, forKey: Keys.scheduleMinute) }
     }
 
-    /// Last sync date (nil if never synced)
+    /// Last successful sync date (nil if never synced successfully)
     var lastSyncDate: Date? {
         get { UserDefaults.standard.object(forKey: Keys.lastSyncDate) as? Date }
         set { UserDefaults.standard.set(newValue, forKey: Keys.lastSyncDate) }
+    }
+
+    /// Last sync attempt date, successful or not (nil if never attempted)
+    var lastSyncAttemptDate: Date? {
+        get { UserDefaults.standard.object(forKey: Keys.lastSyncAttemptDate) as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.lastSyncAttemptDate) }
     }
 
     /// Whether last sync was successful
@@ -161,12 +168,21 @@ final class SyncConfiguration {
         }
     }
 
-    /// Whether backup is overdue (more than 25 hours since last sync)
+    /// Whether backup is overdue (more than 25 hours since last successful sync)
     var isBackupOverdue: Bool {
         guard let lastSync = lastSyncDate else {
             return isConfigured // Overdue if configured but never synced
         }
         return Date().timeIntervalSince(lastSync) > 25 * 3600
+    }
+
+    /// Whether an overdue catch-up sync should run now. Requires the backup
+    /// to be overdue and the last attempt (if any) to be at least an hour old,
+    /// so a persistently failing sync retries hourly rather than continuously.
+    var shouldAttemptCatchUpSync: Bool {
+        guard isBackupOverdue else { return false }
+        guard let lastAttempt = lastSyncAttemptDate else { return true }
+        return Date().timeIntervalSince(lastAttempt) > 3600
     }
 
     // MARK: - Initialization
@@ -251,6 +267,7 @@ final class SyncConfiguration {
             Keys.scheduleHour,
             Keys.scheduleMinute,
             Keys.lastSyncDate,
+            Keys.lastSyncAttemptDate,
             Keys.lastSyncSuccess
         ]
 
@@ -286,9 +303,13 @@ final class SyncConfiguration {
         }
     }
 
-    /// Record a sync attempt result
+    /// Record a sync attempt result. `lastSyncDate` only advances on success
+    /// so overdue detection and catch-up keep working across failures.
     func recordSyncResult(success: Bool) {
-        lastSyncDate = Date()
+        lastSyncAttemptDate = Date()
+        if success {
+            lastSyncDate = Date()
+        }
         lastSyncSuccess = success
     }
 }

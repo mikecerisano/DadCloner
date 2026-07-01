@@ -4,7 +4,7 @@
   <img src="docs/dadcloner-icon-readme.png" width="112" height="112" alt="DadCloner app icon">
 </p>
 
-DadCloner is a tiny macOS menu bar app for automatic external drive backups. It uses `rsync`, remembers the exact source and backup drive UUIDs, and never deletes files from the backup. When something disappears from the source drive, DadCloner moves the backed-up copy into an archive folder instead.
+DadCloner is a tiny macOS menu bar app for automatic external drive backups. It uses `rsync`, remembers the exact source and backup drive UUIDs, and never deletes files from the backup. When something disappears from the source drive, DadCloner moves the backed-up copy into an archive folder instead (folders left empty after their contents are archived are cleaned up).
 
 Built for the kind of backup job where the safest restore path is "plug in the drive and browse normal files."
 
@@ -32,7 +32,7 @@ Everything lives in a `DadCloner Backup` folder on your destination drive:
 - Non-destructive backup behavior: no `--delete`
 - Exact drive matching by volume UUID
 - Free-space preflight before a backup starts
-- Catch-up sync after missed schedules
+- Catch-up sync after missed schedules, including right after the Mac wakes from sleep
 - Visible status for mounted drives, running syncs, and failures
 - Notarized Developer ID beta builds
 - Bundled `rsync` 3.2.7; no Homebrew required
