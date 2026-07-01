@@ -1,4 +1,5 @@
 import Foundation
+import DadClonerCore
 
 /// Stores the backup configuration persistently using UserDefaults.
 /// Uses volume UUIDs (not just paths) to ensure we're syncing the correct drives.
@@ -170,19 +171,18 @@ final class SyncConfiguration {
 
     /// Whether backup is overdue (more than 25 hours since last successful sync)
     var isBackupOverdue: Bool {
-        guard let lastSync = lastSyncDate else {
-            return isConfigured // Overdue if configured but never synced
-        }
-        return Date().timeIntervalSince(lastSync) > 25 * 3600
+        guard isConfigured else { return false }
+        return BackupPolicy.isOverdue(lastSuccess: lastSyncDate, now: Date())
     }
 
-    /// Whether an overdue catch-up sync should run now. Requires the backup
-    /// to be overdue and the last attempt (if any) to be at least an hour old,
-    /// so a persistently failing sync retries hourly rather than continuously.
+    /// Whether an overdue catch-up sync should run now. See BackupPolicy.
     var shouldAttemptCatchUpSync: Bool {
-        guard isBackupOverdue else { return false }
-        guard let lastAttempt = lastSyncAttemptDate else { return true }
-        return Date().timeIntervalSince(lastAttempt) > 3600
+        guard isConfigured else { return false }
+        return BackupPolicy.shouldAttemptCatchUp(
+            lastSuccess: lastSyncDate,
+            lastAttempt: lastSyncAttemptDate,
+            now: Date()
+        )
     }
 
     // MARK: - Initialization

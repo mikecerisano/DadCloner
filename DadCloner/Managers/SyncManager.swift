@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import DadClonerCore
 
 /// Sync operation status
 enum SyncStatus: Equatable {
@@ -245,7 +246,7 @@ final class SyncManager {
 
         // Get list of files in backup that don't exist in source
         // These are files that were deleted from source and need to be archived
-        let orphanedFiles = try findOrphanedFiles(
+        let orphanedFiles = try OrphanScanner().findOrphanedFiles(
             backupPath: backupPath,
             sourcePath: sourcePath
         )
@@ -327,7 +328,14 @@ final class SyncManager {
             }
         }
 
-        removeEmptyOrphanedDirectories(backupPath: backupPath, sourcePath: sourcePath)
+        let cleanup = OrphanScanner().removeEmptyOrphanedDirectories(
+            backupPath: backupPath, sourcePath: sourcePath)
+        for dir in cleanup.removed {
+            logger.info("Removed empty deleted folder: \(dir)")
+        }
+        for warning in cleanup.warnings {
+            logger.warning("Could not remove empty deleted folder", details: warning)
+        }
 
         // If ANY files failed to archive, ABORT the sync
         // This is critical - we don't want to run rsync if archiving failed
@@ -341,147 +349,6 @@ final class SyncManager {
         }
 
         logger.success("Archived \(filesArchived) file(s)")
-    }
-
-    /// Find files in backup that don't exist in source
-    private func findOrphanedFiles(backupPath: String, sourcePath: String) throws -> [String] {
-        var orphanedFiles: [String] = []
-
-        // Skip special system directories and our own files
-        // NOTE: We intentionally DO include hidden user files (like .bashrc, .gitconfig)
-        // because rsync copies them, so we need to archive them too
-        let skipPaths: Set<String> = [
-            SyncConfiguration.archiveDirectoryName,
-            SyncConfiguration.backupMarkerFilename,
-            ".DS_Store",
-            ".Spotlight-V100",
-            ".fseventsd",
-            ".Trashes",
-            ".TemporaryItems",
-            ".DocumentRevisions-V100",
-            ".PKInstallSandboxManager-SystemSoftware"
-        ]
-
-        // Use enumerator to walk the backup directory
-        // IMPORTANT: We do NOT skip hidden files - rsync copies them, so we must archive them too
-        guard let enumerator = fileManager.enumerator(
-            at: URL(fileURLWithPath: backupPath),
-            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey],
-            options: []  // No options = include hidden files
-        ) else {
-            return []
-        }
-
-        for case let fileURL as URL in enumerator {
-            // Get relative path
-            let fullPath = fileURL.path
-            guard fullPath.hasPrefix(backupPath) else { continue }
-
-            var relativePath = String(fullPath.dropFirst(backupPath.count))
-            if relativePath.hasPrefix("/") {
-                relativePath = String(relativePath.dropFirst())
-            }
-
-            // Skip special system directories
-            let firstComponent = relativePath.components(separatedBy: "/").first ?? ""
-            if skipPaths.contains(firstComponent) {
-                if let isDir = try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory, isDir == true {
-                    enumerator.skipDescendants()
-                }
-                continue
-            }
-
-            // Check if this is a file or symlink (not just directory)
-            // We need to handle both regular files AND symlinks since rsync copies symlinks
-            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else {
-                continue
-            }
-
-            let isRegularFile = resourceValues.isRegularFile ?? false
-            let isSymlink = resourceValues.isSymbolicLink ?? false
-
-            guard isRegularFile || isSymlink else {
-                continue
-            }
-
-            // Check if file exists in source
-            // For symlinks, we check if the symlink itself exists, not its target
-            let sourceFile = (sourcePath as NSString).appendingPathComponent(relativePath)
-            if !itemExistsIncludingSymlink(atPath: sourceFile) {
-                orphanedFiles.append(relativePath)
-            }
-        }
-
-        return orphanedFiles
-    }
-
-    private func itemExistsIncludingSymlink(atPath path: String) -> Bool {
-        if fileManager.fileExists(atPath: path) {
-            return true
-        }
-
-        return (try? fileManager.destinationOfSymbolicLink(atPath: path)) != nil
-    }
-
-    private func removeEmptyOrphanedDirectories(backupPath: String, sourcePath: String) {
-        guard let enumerator = fileManager.enumerator(
-            at: URL(fileURLWithPath: backupPath),
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: []
-        ) else {
-            return
-        }
-
-        var directories: [String] = []
-
-        for case let fileURL as URL in enumerator {
-            guard let isDirectory = try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory,
-                  isDirectory == true else {
-                continue
-            }
-
-            let fullPath = fileURL.path
-            guard fullPath.hasPrefix(backupPath) else { continue }
-
-            var relativePath = String(fullPath.dropFirst(backupPath.count))
-            if relativePath.hasPrefix("/") {
-                relativePath = String(relativePath.dropFirst())
-            }
-
-            let firstComponent = relativePath.components(separatedBy: "/").first ?? ""
-            let skipPaths: Set<String> = [
-                SyncConfiguration.archiveDirectoryName,
-                SyncConfiguration.backupMarkerFilename,
-                ".DS_Store",
-                ".Spotlight-V100",
-                ".fseventsd",
-                ".Trashes",
-                ".TemporaryItems",
-                ".DocumentRevisions-V100",
-                ".PKInstallSandboxManager-SystemSoftware"
-            ]
-
-            if skipPaths.contains(firstComponent) {
-                enumerator.skipDescendants()
-                continue
-            }
-
-            if !itemExistsIncludingSymlink(atPath: (sourcePath as NSString).appendingPathComponent(relativePath)) {
-                directories.append(fullPath)
-            }
-        }
-
-        for directory in directories.sorted(by: { $0.count > $1.count }) {
-            do {
-                let contents = try fileManager.contentsOfDirectory(atPath: directory)
-                if contents.isEmpty {
-                    try fileManager.removeItem(atPath: directory)
-                    logger.info("Removed empty deleted folder: \(directory)")
-                }
-            } catch {
-                logger.warning("Could not remove empty deleted folder", details: "\(directory): \(error.localizedDescription)")
-            }
-        }
     }
 
     // MARK: - Step 3: Perform Rsync
@@ -521,9 +388,7 @@ final class SyncManager {
         }
 
         // Count files from dry run output
-        let fileCount = dryRunResult.stdout.components(separatedBy: "\n")
-            .filter { $0.hasPrefix(">f") || $0.hasPrefix("<f") || $0.hasPrefix("cf") }
-            .count
+        let fileCount = RsyncOutput.fileCount(fromItemized: dryRunResult.stdout)
 
         logger.info("Dry run complete: \(fileCount) file(s) to sync")
 
@@ -562,7 +427,7 @@ final class SyncManager {
     }
 
     private func validateAvailableSpace(forDryRunOutput output: String) throws {
-        guard let requiredBytes = parseTransferredFileSize(from: output),
+        guard let requiredBytes = RsyncOutput.transferredFileSize(fromStats: output),
               requiredBytes > 0 else {
             logger.warning("Could not estimate transfer size from dry run; continuing")
             return
@@ -589,24 +454,6 @@ final class SyncManager {
             throw SyncError.insufficientSpace("Could not determine free space on backup drive.")
         }
         return freeSpace.int64Value
-    }
-
-    private func parseTransferredFileSize(from output: String) -> Int64? {
-        for line in output.components(separatedBy: .newlines) {
-            let lowercasedLine = line.lowercased()
-            guard lowercasedLine.contains("total transferred file size:") else {
-                continue
-            }
-
-            guard let valuePart = line.split(separator: ":", maxSplits: 1).last else {
-                return nil
-            }
-
-            let digits = valuePart.filter { $0.isNumber }
-            return Int64(String(digits))
-        }
-
-        return nil
     }
 
     private func formatBytes(_ bytes: Int64) -> String {
@@ -687,7 +534,7 @@ final class SyncManager {
 
     @MainActor
     private func handleRsyncOutputLine(_ line: String) {
-        if let percent = parseRsyncProgressPercent(from: line) {
+        if let percent = RsyncOutput.progressPercent(from: line) {
             let start = 0.3
             let end = 0.9
             let mapped = start + (end - start) * min(max(percent, 0.0), 1.0)
@@ -697,34 +544,9 @@ final class SyncManager {
             return
         }
 
-        guard isRsyncFileLine(line) else { return }
+        guard RsyncOutput.isFileLine(line) else { return }
         filesProcessed += 1
-        currentFile = extractRsyncFilename(from: line)
-    }
-
-    private func isRsyncFileLine(_ line: String) -> Bool {
-        return line.hasPrefix(">f") || line.hasPrefix("<f") || line.hasPrefix("cf")
-    }
-
-    private func extractRsyncFilename(from line: String) -> String {
-        guard let spaceIndex = line.firstIndex(of: " ") else { return line }
-        let name = line[line.index(after: spaceIndex)...]
-        return name.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func parseRsyncProgressPercent(from line: String) -> Double? {
-        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return nil }
-        let tokens = trimmed.split(separator: " ")
-        for token in tokens {
-            if token.hasSuffix("%") {
-                let number = token.dropLast()
-                if let value = Double(number) {
-                    return value / 100.0
-                }
-            }
-        }
-        return nil
+        currentFile = RsyncOutput.filename(from: line)
     }
 
     private func bundledRsyncPath() throws -> String {

@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 60;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -19,6 +19,7 @@
 		A0A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1A /* Assets.xcassets */; };
 		A0B /* LaunchAtLogin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D /* LaunchAtLogin.swift */; };
 		A0C /* rsync in Resources */ = {isa = PBXBuildFile; fileRef = A1E /* rsync */; };
+		A0D /* DadClonerCore in Frameworks */ = {isa = PBXBuildFile; productRef = APD1 /* DadClonerCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -44,6 +45,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A0D /* DadClonerCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -143,6 +145,9 @@
 			dependencies = (
 			);
 			name = DadCloner;
+			packageProductDependencies = (
+				APD1 /* DadClonerCore */,
+			);
 			productName = DadCloner;
 			productReference = A00 /* DadCloner.app */;
 			productType = "com.apple.product-type.application";
@@ -163,7 +168,6 @@
 				};
 			};
 			buildConfigurationList = ABCL0 /* Build configuration list for PBXProject "DadCloner" */;
-			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -171,6 +175,9 @@
 				Base,
 			);
 			mainGroup = AG00;
+			packageReferences = (
+				APR1 /* XCLocalSwiftPackageReference "DadClonerCore" */,
+			);
 			productRefGroup = AG02 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -211,6 +218,20 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		APR1 /* XCLocalSwiftPackageReference "DadClonerCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = DadClonerCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		APD1 /* DadClonerCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DadClonerCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		ABC0 /* Debug */ = {

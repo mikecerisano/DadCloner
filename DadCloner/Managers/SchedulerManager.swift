@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import UserNotifications
+import DadClonerCore
 
 /// Manages scheduled daily backups.
 ///
@@ -111,17 +112,12 @@ final class SchedulerManager {
 
     /// The next time the configured schedule occurs strictly after `date`.
     private func nextOccurrence(after date: Date) -> Date? {
-        let calendar = Calendar.current
-        var components = calendar.dateComponents([.year, .month, .day], from: date)
-        components.hour = config.scheduleHour
-        components.minute = config.scheduleMinute
-        components.second = 0
-
-        guard let today = calendar.date(from: components) else { return nil }
-        if today > date {
-            return today
-        }
-        return calendar.date(byAdding: .day, value: 1, to: today)
+        BackupPolicy.nextOccurrence(
+            hour: config.scheduleHour,
+            minute: config.scheduleMinute,
+            after: date,
+            calendar: Calendar.current
+        )
     }
 
     private func updateNextScheduledSync() {
