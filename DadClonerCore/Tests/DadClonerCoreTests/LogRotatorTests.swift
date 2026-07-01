@@ -53,4 +53,16 @@ final class LogRotatorTests: XCTestCase {
         let secondLine = content.components(separatedBy: "\n")[1]
         XCTAssertTrue(secondLine.hasPrefix("line "), "got partial line: \(secondLine)")
     }
+
+    func testTailWithoutNewlineIsDroppedEntirely() throws {
+        // One giant line with no newlines: nothing in the tail is a
+        // complete line, so only the truncation header should survive.
+        let giant = String(repeating: "x", count: 1000)
+        try giant.write(toFile: path, atomically: true, encoding: .utf8)
+        try LogRotator.rotate(fileAtPath: path, maxBytes: 500, keepBytes: 300)
+
+        let content = try String(contentsOfFile: path, encoding: .utf8)
+        XCTAssertTrue(content.hasPrefix("[log truncated]"))
+        XCTAssertFalse(content.contains("xxx"))
+    }
 }
