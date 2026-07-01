@@ -20,6 +20,7 @@
 		A0B /* LaunchAtLogin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D /* LaunchAtLogin.swift */; };
 		A0C /* rsync in Resources */ = {isa = PBXBuildFile; fileRef = A1E /* rsync */; };
 		A0D /* DadClonerCore in Frameworks */ = {isa = PBXBuildFile; productRef = APD1 /* DadClonerCore */; };
+		A0E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F /* SettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -38,6 +39,7 @@
 		A1C /* DadCloner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DadCloner.entitlements; sourceTree = "<group>"; };
 		A1D /* LaunchAtLogin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAtLogin.swift; sourceTree = "<group>"; };
 		A1E /* rsync */ = {isa = PBXFileReference; lastKnownFileType = file; path = rsync; sourceTree = "<group>"; };
+		A1F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -108,6 +110,7 @@
 			children = (
 				A17 /* SetupView.swift */,
 				A18 /* MenuBarPopover.swift */,
+				A1F /* SettingsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -212,6 +215,7 @@
 				A06 /* SchedulerManager.swift in Sources */,
 				A07 /* SetupView.swift in Sources */,
 				A08 /* MenuBarPopover.swift in Sources */,
+				A0E /* SettingsView.swift in Sources */,
 				A09 /* DriveMonitor.swift in Sources */,
 				A0B /* LaunchAtLogin.swift in Sources */,
 			);
