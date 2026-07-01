@@ -30,6 +30,7 @@ final class SyncConfiguration {
     // MARK: - Backup Marker
     /// This file is created on the backup drive to mark it as a valid backup destination.
     /// Prevents accidentally syncing to the wrong drive.
+    // Keep in sync with OrphanScanner.skipPaths in DadClonerCore.
     static let backupMarkerFilename = ".dadcloner_backup"
 
     // MARK: - Backup Destination Folder

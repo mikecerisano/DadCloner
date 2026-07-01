@@ -8,6 +8,10 @@ public struct OrphanScanner {
     /// Entries never treated as orphans: our own metadata plus macOS
     /// volume system directories. Hidden *user* files are intentionally
     /// NOT skipped — rsync copies them, so we must archive them too.
+    // NOTE: "DadCloner_Archive" and ".dadcloner_backup" below must stay in
+    // sync with SyncConfiguration.archiveDirectoryName / backupMarkerFilename
+    // in the app target. DadClonerCore has no dependency on the app, so this
+    // is enforced by convention — if you rename either there, update it here.
     public static let skipPaths: Set<String> = [
         "DadCloner_Archive",
         ".dadcloner_backup",
