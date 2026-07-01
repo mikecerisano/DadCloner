@@ -1,4 +1,5 @@
 import Foundation
+import DadClonerCore
 
 /// Represents a single log entry for sync operations
 struct SyncLogEntry: Identifiable, Codable {
@@ -121,6 +122,10 @@ final class SyncLogger {
 
     private let maxRecentEntries = 100
     private let logFilename = "sync_log.txt"
+    /// Rotate when the log exceeds this size...
+    private let logMaxBytes = 512 * 1024
+    /// ...keeping roughly this much of the newest content.
+    private let logKeepBytes = 256 * 1024
 
     private var logFilePath: String {
         let archivePath = SyncConfiguration.shared.archivePath
@@ -240,6 +245,12 @@ final class SyncLogger {
             } else {
                 try logContent.write(toFile: logFilePath, atomically: true, encoding: .utf8)
             }
+
+            try LogRotator.rotate(
+                fileAtPath: logFilePath,
+                maxBytes: logMaxBytes,
+                keepBytes: logKeepBytes
+            )
         } catch {
             print("Failed to write to log file: \(error)")
         }
