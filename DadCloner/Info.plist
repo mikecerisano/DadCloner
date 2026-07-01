@@ -30,5 +30,11 @@
 	<string>Copyright 2024. All rights reserved.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/mikecerisano/DadCloner/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>XF1S75FMDKm4YHDNjtXPgHnT50NKAiDWgYnqrWS4km0=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 </dict>
 </plist>

@@ -21,6 +21,7 @@
 		A0C /* rsync in Resources */ = {isa = PBXBuildFile; fileRef = A1E /* rsync */; };
 		A0D /* DadClonerCore in Frameworks */ = {isa = PBXBuildFile; productRef = APD1 /* DadClonerCore */; };
 		A0E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F /* SettingsView.swift */; };
+		A0F /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = APD2 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -48,6 +49,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A0D /* DadClonerCore in Frameworks */,
+				A0F /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -150,6 +152,7 @@
 			name = DadCloner;
 			packageProductDependencies = (
 				APD1 /* DadClonerCore */,
+				APD2 /* Sparkle */,
 			);
 			productName = DadCloner;
 			productReference = A00 /* DadCloner.app */;
@@ -180,6 +183,7 @@
 			mainGroup = AG00;
 			packageReferences = (
 				APR1 /* XCLocalSwiftPackageReference "DadClonerCore" */,
+				APR2 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			productRefGroup = AG02 /* Products */;
 			projectDirPath = "";
@@ -230,10 +234,26 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		APR2 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.6.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		APD1 /* DadClonerCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = DadClonerCore;
+		};
+		APD2 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = APR2 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 

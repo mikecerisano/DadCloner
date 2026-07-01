@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import UserNotifications
+import Sparkle
 
 /// Main app delegate handling menu bar setup and lifecycle
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -11,6 +12,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var setupWindow: NSWindow?
     private var statusTimer: Timer?
     private var notificationObservers: [NSObjectProtocol] = []
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true,
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
 
     private let config = SyncConfiguration.shared
     private let driveMonitor = DriveMonitor.shared
@@ -158,6 +164,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Manual update check, triggered from Settings
+    func checkForUpdates() {
+        updaterController.checkForUpdates(nil)
     }
 
     // MARK: - Drive Monitoring

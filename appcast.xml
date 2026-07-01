@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+    <channel>
+        <title>DadCloner Updates</title>
+        <!-- Add one <item> per release. Generate signatures with Sparkle's
+             sign_update tool, e.g.:
+               sign_update DadCloner-1.0.zip
+             then paste the printed sparkle:edSignature and length here.
+        <item>
+            <title>1.0</title>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/mikecerisano/DadCloner/releases/download/v1.0/DadCloner-1.0.zip"
+                sparkle:edSignature="SIGNATURE_FROM_SIGN_UPDATE"
+                length="LENGTH_FROM_SIGN_UPDATE"
+                type="application/octet-stream"/>
+        </item>
+        -->
+    </channel>
+</rss>

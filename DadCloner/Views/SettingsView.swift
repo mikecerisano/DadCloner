@@ -64,10 +64,20 @@ struct SettingsView: View {
                         (NSApp.delegate as? AppDelegate)?.showSetupWindow()
                     }
                 }
+
+                Section("Updates") {
+                    LabeledContent(
+                        "Version",
+                        value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+                    )
+                    Button("Check for Updates…") {
+                        (NSApp.delegate as? AppDelegate)?.checkForUpdates()
+                    }
+                }
             }
             .formStyle(.grouped)
         }
-        .frame(width: 380, height: 340)
+        .frame(width: 380, height: 420)
         .onAppear {
             var components = DateComponents()
             components.hour = config.scheduleHour
