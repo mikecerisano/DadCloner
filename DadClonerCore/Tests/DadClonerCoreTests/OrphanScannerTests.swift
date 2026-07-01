@@ -9,7 +9,16 @@ final class OrphanScannerTests: XCTestCase {
     let fm = FileManager.default
 
     override func setUpWithError() throws {
-        root = URL(fileURLWithPath: NSTemporaryDirectory())
+        // NSTemporaryDirectory() on macOS lives under /var, which is itself
+        // a symlink to /private/var. URL.resolvingSymlinksInPath() only
+        // resolves the final path component if it's a symlink, so it does
+        // NOT canonicalize this path; the .canonicalPathKey resource value
+        // does a full realpath()-style resolution and is what we need so
+        // paths built under `root` match what FileManager's enumerator
+        // reports back.
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+        let canonicalPath = (try? tempRoot.resourceValues(forKeys: [.canonicalPathKey]).canonicalPath) ?? nil
+        root = URL(fileURLWithPath: canonicalPath ?? tempRoot.path)
             .appendingPathComponent("OrphanScannerTests-\(UUID().uuidString)")
         source = root.appendingPathComponent("source")
         backup = root.appendingPathComponent("backup")

@@ -1,5 +1,4 @@
 import Foundation
-import Darwin
 
 /// Finds files present in the backup but missing from the source
 /// ("orphans" — deleted on the source, due to be archived), and removes
@@ -32,12 +31,8 @@ public struct OrphanScanner {
     public func findOrphanedFiles(backupPath: String, sourcePath: String) throws -> [String] {
         var orphaned: [String] = []
 
-        // Resolve symlinks in paths for comparison (important on macOS where /var -> /private/var)
-        let resolvedBackupPath = resolveSymlinks(backupPath)
-        let resolvedSourcePath = resolveSymlinks(sourcePath)
-
         guard let enumerator = fileManager.enumerator(
-            at: URL(fileURLWithPath: resolvedBackupPath),
+            at: URL(fileURLWithPath: backupPath),
             includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey],
             options: [] // include hidden files
         ) else {
@@ -45,15 +40,9 @@ public struct OrphanScanner {
         }
 
         for case let fileURL as URL in enumerator {
-            let fullPath = fileURL.path
-            guard fullPath.hasPrefix(resolvedBackupPath) else { continue }
+            guard let relativePath = relativePath(of: fileURL.path, under: backupPath) else { continue }
 
-            var relPath = String(fullPath.dropFirst(resolvedBackupPath.count))
-            if relPath.hasPrefix("/") {
-                relPath = String(relPath.dropFirst())
-            }
-
-            let firstComponent = relPath.components(separatedBy: "/").first ?? ""
+            let firstComponent = relativePath.components(separatedBy: "/").first ?? ""
             if OrphanScanner.skipPaths.contains(firstComponent) {
                 if (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
                     enumerator.skipDescendants()
@@ -68,10 +57,9 @@ public struct OrphanScanner {
                 continue
             }
 
-            // Check if exists in source using resolved path
-            let sourceFile = (resolvedSourcePath as NSString).appendingPathComponent(relPath)
+            let sourceFile = (sourcePath as NSString).appendingPathComponent(relativePath)
             if !itemExists(atPath: sourceFile) {
-                orphaned.append(relPath)
+                orphaned.append(relativePath)
             }
         }
 
@@ -89,12 +77,8 @@ public struct OrphanScanner {
         var removed: [String] = []
         var warnings: [String] = []
 
-        // Resolve symlinks in paths for comparison (important on macOS where /var -> /private/var)
-        let resolvedBackupPath = resolveSymlinks(backupPath)
-        let resolvedSourcePath = resolveSymlinks(sourcePath)
-
         guard let enumerator = fileManager.enumerator(
-            at: URL(fileURLWithPath: resolvedBackupPath),
+            at: URL(fileURLWithPath: backupPath),
             includingPropertiesForKeys: [.isDirectoryKey],
             options: []
         ) else {
@@ -105,73 +89,43 @@ public struct OrphanScanner {
             guard (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
                 continue
             }
+            guard let relativePath = relativePath(of: fileURL.path, under: backupPath) else { continue }
 
-            let fullPath = fileURL.path
-            guard fullPath.hasPrefix(resolvedBackupPath) else { continue }
-
-            var relPath = String(fullPath.dropFirst(resolvedBackupPath.count))
-            if relPath.hasPrefix("/") {
-                relPath = String(relPath.dropFirst())
-            }
-
-            let firstComponent = relPath.components(separatedBy: "/").first ?? ""
+            let firstComponent = relativePath.components(separatedBy: "/").first ?? ""
             if OrphanScanner.skipPaths.contains(firstComponent) {
                 enumerator.skipDescendants()
                 continue
             }
 
-            if !itemExists(atPath: (resolvedSourcePath as NSString).appendingPathComponent(relPath)) {
-                // Store the full path, which we'll need for file operations
-                candidates.append(fullPath)
+            if !itemExists(atPath: (sourcePath as NSString).appendingPathComponent(relativePath)) {
+                candidates.append(fileURL.path)
             }
         }
 
-        for resolvedDirPath in candidates.sorted(by: { $0.count > $1.count }) {
+        for directory in candidates.sorted(by: { $0.count > $1.count }) {
             do {
-                let contents = try fileManager.contentsOfDirectory(atPath: resolvedDirPath)
+                let contents = try fileManager.contentsOfDirectory(atPath: directory)
                 if contents.isEmpty {
-                    try fileManager.removeItem(atPath: resolvedDirPath)
-                    // Convert back to original path format for return value
-                    let normalizedPath = normalizePathToMatch(resolvedDirPath, resolvedBackupPath: resolvedBackupPath, originalBackupPath: backupPath)
-                    removed.append(normalizedPath)
+                    try fileManager.removeItem(atPath: directory)
+                    removed.append(directory)
                 }
             } catch {
-                warnings.append("\(resolvedDirPath): \(error.localizedDescription)")
+                warnings.append("\(directory): \(error.localizedDescription)")
             }
         }
 
         return (removed, warnings)
     }
 
-    /// Convert a resolved path back to the format of the original input path.
-    /// This handles macOS symlinks where /var -> /private/var.
-    private func normalizePathToMatch(
-        _ resolvedPath: String,
-        resolvedBackupPath: String,
-        originalBackupPath: String
-    ) -> String {
-        // If the paths are already in the same format, return as-is
-        if originalBackupPath == resolvedBackupPath {
-            return resolvedPath
-        }
-
-        // Replace the resolved prefix with the original prefix
-        guard resolvedPath.hasPrefix(resolvedBackupPath) else { return resolvedPath }
-        let suffix = String(resolvedPath.dropFirst(resolvedBackupPath.count))
-        return originalBackupPath + suffix
-    }
-
     // MARK: - Helpers
 
-    /// Resolves symlinks and standardizes paths for comparison.
-    /// Important on macOS where /var -> /private/var.
-    private func resolveSymlinks(_ path: String) -> String {
-        // Use realpath to resolve symlinks (Darwin API)
-        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
-        if realpath(path, &buffer) != nil {
-            return String(cString: buffer)
+    private func relativePath(of fullPath: String, under basePath: String) -> String? {
+        guard fullPath.hasPrefix(basePath) else { return nil }
+        var relative = String(fullPath.dropFirst(basePath.count))
+        if relative.hasPrefix("/") {
+            relative = String(relative.dropFirst())
         }
-        return path
+        return relative
     }
 
     /// True if a file, directory, or symlink (even dangling) exists at path.
