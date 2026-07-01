@@ -35,9 +35,12 @@ struct SettingsView: View {
                     .onChange(of: scheduleTime) { _, newValue in
                         let components = Calendar.current.dateComponents(
                             [.hour, .minute], from: newValue)
+                        let newHour = components.hour ?? 2
+                        let newMinute = components.minute ?? 0
+                        guard newHour != config.scheduleHour || newMinute != config.scheduleMinute else { return }
                         scheduler.updateSchedule(
-                            hour: components.hour ?? 2,
-                            minute: components.minute ?? 0
+                            hour: newHour,
+                            minute: newMinute
                         )
                     }
 
