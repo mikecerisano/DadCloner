@@ -171,6 +171,14 @@ struct MenuBarPopover: View {
                     Text("Last backup: \(config.timeSinceLastSync)")
                         .font(.caption)
                         .foregroundColor(.secondary)
+
+                    if !config.lastSyncSuccess, let error = config.lastSyncError {
+                        Text(error)
+                            .font(.caption2)
+                            .foregroundColor(.red)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
 

@@ -23,6 +23,7 @@ final class SyncConfiguration {
         static let lastSyncDate = "dadcloner.lastSyncDate"
         static let lastSyncAttemptDate = "dadcloner.lastSyncAttemptDate"
         static let lastSyncSuccess = "dadcloner.lastSyncSuccess"
+        static let lastSyncError = "dadcloner.lastSyncError"
     }
 
     // MARK: - Backup Marker
@@ -110,6 +111,12 @@ final class SyncConfiguration {
     var lastSyncSuccess: Bool {
         get { UserDefaults.standard.bool(forKey: Keys.lastSyncSuccess) }
         set { UserDefaults.standard.set(newValue, forKey: Keys.lastSyncSuccess) }
+    }
+
+    /// Human-readable reason the last sync failed (nil after a success)
+    var lastSyncError: String? {
+        get { UserDefaults.standard.string(forKey: Keys.lastSyncError) }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.lastSyncError) }
     }
 
     // MARK: - Computed Properties
@@ -268,7 +275,8 @@ final class SyncConfiguration {
             Keys.scheduleMinute,
             Keys.lastSyncDate,
             Keys.lastSyncAttemptDate,
-            Keys.lastSyncSuccess
+            Keys.lastSyncSuccess,
+            Keys.lastSyncError
         ]
 
         for key in keys {
@@ -305,11 +313,12 @@ final class SyncConfiguration {
 
     /// Record a sync attempt result. `lastSyncDate` only advances on success
     /// so overdue detection and catch-up keep working across failures.
-    func recordSyncResult(success: Bool) {
+    func recordSyncResult(success: Bool, error: String? = nil) {
         lastSyncAttemptDate = Date()
         if success {
             lastSyncDate = Date()
         }
         lastSyncSuccess = success
+        lastSyncError = success ? nil : error
     }
 }

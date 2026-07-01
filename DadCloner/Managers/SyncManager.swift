@@ -144,7 +144,7 @@ final class SyncManager {
         } catch let error as SyncError {
             status = .failed(error.localizedDescription)
             logger.error("Sync failed", details: error.localizedDescription)
-            config.recordSyncResult(success: false)
+            config.recordSyncResult(success: false, error: error.localizedDescription)
 
             await sendNotification(
                 title: "Backup Failed",
@@ -154,7 +154,7 @@ final class SyncManager {
         } catch {
             status = .failed(error.localizedDescription)
             logger.error("Sync failed with unexpected error", details: error.localizedDescription)
-            config.recordSyncResult(success: false)
+            config.recordSyncResult(success: false, error: error.localizedDescription)
 
             await sendNotification(
                 title: "Backup Failed",
