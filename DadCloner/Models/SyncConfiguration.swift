@@ -1,4 +1,5 @@
 import Foundation
+import DadClonerCore
 
 /// Stores the backup configuration persistently using UserDefaults.
 /// Uses volume UUIDs (not just paths) to ensure we're syncing the correct drives.
@@ -22,11 +23,14 @@ final class SyncConfiguration {
         static let lastSyncDate = "dadcloner.lastSyncDate"
         static let lastSyncAttemptDate = "dadcloner.lastSyncAttemptDate"
         static let lastSyncSuccess = "dadcloner.lastSyncSuccess"
+        static let lastSyncError = "dadcloner.lastSyncError"
+        static let isSchedulePaused = "dadcloner.isSchedulePaused"
     }
 
     // MARK: - Backup Marker
     /// This file is created on the backup drive to mark it as a valid backup destination.
     /// Prevents accidentally syncing to the wrong drive.
+    // Keep in sync with OrphanScanner.skipPaths in DadClonerCore.
     static let backupMarkerFilename = ".dadcloner_backup"
 
     // MARK: - Backup Destination Folder
@@ -111,6 +115,18 @@ final class SyncConfiguration {
         set { UserDefaults.standard.set(newValue, forKey: Keys.lastSyncSuccess) }
     }
 
+    /// Human-readable reason the last sync failed (nil after a success)
+    var lastSyncError: String? {
+        get { UserDefaults.standard.string(forKey: Keys.lastSyncError) }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.lastSyncError) }
+    }
+
+    /// Whether automatic backups are paused (manual Backup Now still works)
+    var isSchedulePaused: Bool {
+        get { UserDefaults.standard.bool(forKey: Keys.isSchedulePaused) }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.isSchedulePaused) }
+    }
+
     // MARK: - Computed Properties
 
     /// Full path to the archive directory on backup drive
@@ -170,19 +186,18 @@ final class SyncConfiguration {
 
     /// Whether backup is overdue (more than 25 hours since last successful sync)
     var isBackupOverdue: Bool {
-        guard let lastSync = lastSyncDate else {
-            return isConfigured // Overdue if configured but never synced
-        }
-        return Date().timeIntervalSince(lastSync) > 25 * 3600
+        guard isConfigured else { return false }
+        return BackupPolicy.isOverdue(lastSuccess: lastSyncDate, now: Date())
     }
 
-    /// Whether an overdue catch-up sync should run now. Requires the backup
-    /// to be overdue and the last attempt (if any) to be at least an hour old,
-    /// so a persistently failing sync retries hourly rather than continuously.
+    /// Whether an overdue catch-up sync should run now. See BackupPolicy.
     var shouldAttemptCatchUpSync: Bool {
-        guard isBackupOverdue else { return false }
-        guard let lastAttempt = lastSyncAttemptDate else { return true }
-        return Date().timeIntervalSince(lastAttempt) > 3600
+        guard isConfigured else { return false }
+        return BackupPolicy.shouldAttemptCatchUp(
+            lastSuccess: lastSyncDate,
+            lastAttempt: lastSyncAttemptDate,
+            now: Date()
+        )
     }
 
     // MARK: - Initialization
@@ -268,7 +283,9 @@ final class SyncConfiguration {
             Keys.scheduleMinute,
             Keys.lastSyncDate,
             Keys.lastSyncAttemptDate,
-            Keys.lastSyncSuccess
+            Keys.lastSyncSuccess,
+            Keys.lastSyncError,
+            Keys.isSchedulePaused
         ]
 
         for key in keys {
@@ -305,11 +322,12 @@ final class SyncConfiguration {
 
     /// Record a sync attempt result. `lastSyncDate` only advances on success
     /// so overdue detection and catch-up keep working across failures.
-    func recordSyncResult(success: Bool) {
+    func recordSyncResult(success: Bool, error: String? = nil) {
         lastSyncAttemptDate = Date()
         if success {
             lastSyncDate = Date()
         }
         lastSyncSuccess = success
+        lastSyncError = success ? nil : error
     }
 }

@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import UserNotifications
+import DadClonerCore
 
 /// Manages scheduled daily backups.
 ///
@@ -38,6 +39,12 @@ final class SchedulerManager {
             return
         }
 
+        guard !config.isSchedulePaused else {
+            isScheduleEnabled = false
+            logger.info("Scheduler not started - automatic backups are paused")
+            return
+        }
+
         isScheduleEnabled = true
         updateNextScheduledSync()
         startTickTimer()
@@ -66,6 +73,16 @@ final class SchedulerManager {
         config.scheduleMinute = minute
         updateNextScheduledSync()
         logger.info("Schedule updated to \(config.scheduleTimeFormatted)")
+    }
+
+    /// Pause or resume automatic backups. Manual syncs are unaffected.
+    func setPaused(_ paused: Bool) {
+        config.isSchedulePaused = paused
+        if paused {
+            stop()
+        } else {
+            start()
+        }
     }
 
     // MARK: - Scheduling Logic
@@ -111,17 +128,12 @@ final class SchedulerManager {
 
     /// The next time the configured schedule occurs strictly after `date`.
     private func nextOccurrence(after date: Date) -> Date? {
-        let calendar = Calendar.current
-        var components = calendar.dateComponents([.year, .month, .day], from: date)
-        components.hour = config.scheduleHour
-        components.minute = config.scheduleMinute
-        components.second = 0
-
-        guard let today = calendar.date(from: components) else { return nil }
-        if today > date {
-            return today
-        }
-        return calendar.date(byAdding: .day, value: 1, to: today)
+        BackupPolicy.nextOccurrence(
+            hour: config.scheduleHour,
+            minute: config.scheduleMinute,
+            after: date,
+            calendar: Calendar.current
+        )
     }
 
     private func updateNextScheduledSync() {
@@ -180,6 +192,10 @@ final class SchedulerManager {
 
     /// Human-readable description of next sync time
     var nextSyncDescription: String {
+        if config.isSchedulePaused {
+            return "Paused"
+        }
+
         guard let next = nextScheduledSync else {
             return "Not scheduled"
         }

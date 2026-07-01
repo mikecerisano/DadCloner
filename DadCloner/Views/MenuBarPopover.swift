@@ -45,6 +45,7 @@ struct MenuBarPopover: View {
     @State private var notificationStatus: UNAuthorizationStatus?
 
     @State private var showingLog = false
+    @State private var showingSettings = false
     @State private var showingResetConfirmation = false
     @State private var isOptionKeyHeld = false
     @State private var flagsMonitor: Any?
@@ -76,6 +77,9 @@ struct MenuBarPopover: View {
         .frame(width: 300)
         .sheet(isPresented: $showingLog) {
             LogView()
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView()
         }
         .onAppear {
             Task {
@@ -171,6 +175,14 @@ struct MenuBarPopover: View {
                     Text("Last backup: \(config.timeSinceLastSync)")
                         .font(.caption)
                         .foregroundColor(.secondary)
+
+                    if !config.lastSyncSuccess, let error = config.lastSyncError {
+                        Text(error)
+                            .font(.caption2)
+                            .foregroundColor(.red)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
 
@@ -338,17 +350,6 @@ struct MenuBarPopover: View {
 
     private var footerSection: some View {
         VStack(spacing: 8) {
-            // Launch at login toggle
-            Toggle(isOn: Binding(
-                get: { LaunchAtLogin.shared.isEnabled },
-                set: { LaunchAtLogin.shared.isEnabled = $0 }
-            )) {
-                Text("Start at login")
-                    .font(.caption)
-            }
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-
             HStack {
                 Button(action: { NSApplication.shared.terminate(nil) }) {
                     Text("Quit")
@@ -356,6 +357,18 @@ struct MenuBarPopover: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundColor(.secondary)
+
+                Button(action: { showingSettings = true }) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "gearshape")
+                        Text("Settings")
+                    }
+                    .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .disabled(!config.isConfigured)
+                .padding(.leading, 12)
 
                 Spacer()
 

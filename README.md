@@ -12,9 +12,9 @@ My dad's 75 and has decades of recording sessions and jingles on external drives
 
 ## Download
 
-Download the latest beta from the [GitHub Releases page](https://github.com/mikecerisano/DadCloner/releases).
+Download the latest release from the [GitHub Releases page](https://github.com/mikecerisano/DadCloner/releases).
 
-DadCloner is currently beta software. Test it with non-critical folders or drives before using it for anything irreplaceable.
+DadCloner 1.0 updates itself: when a new version ships, the app offers the update automatically.
 
 ## How it works
 
@@ -33,8 +33,12 @@ Everything lives in a `DadCloner Backup` folder on your destination drive:
 - Exact drive matching by volume UUID
 - Free-space preflight before a backup starts
 - Catch-up sync after missed schedules, including right after the Mac wakes from sleep
+- Settings for changing the schedule, pausing backups, or re-picking drives after setup
+- Failure reasons shown right in the menu bar popover
+- Built-in updates via Sparkle
+- Sync log capped at 512 KB so it never grows unbounded
 - Visible status for mounted drives, running syncs, and failures
-- Notarized Developer ID beta builds
+- Notarized Developer ID builds
 - Bundled `rsync` 3.2.7; no Homebrew required
 
 ## What it doesn't do
@@ -46,7 +50,7 @@ Everything lives in a `DadCloner Backup` folder on your destination drive:
 
 ## Current limitations
 
-- Apple Silicon only for the public beta because the bundled `rsync` helper is arm64.
+- Apple Silicon only, because the bundled `rsync` helper is arm64.
 - Not a versioned backup system. It keeps the current mirrored copy plus archived files that disappeared from the source.
 - No cloud sync, encryption, drive formatting, or network backup support.
 
@@ -66,11 +70,17 @@ In Xcode:
 3. Set your **Team** to your Apple Developer account (or Personal Team for local builds)
 4. Build and run
 
+Core logic (rsync output parsing, schedule math, orphan scanning, log rotation) lives in the `DadClonerCore` Swift package. Run its tests with:
+
+```bash
+swift test --package-path DadClonerCore
+```
+
 ## Releasing
 
 Use a Developer ID Application certificate for public builds. Sign the bundled `rsync` binary before re-signing and notarizing the app bundle.
 
-Basic beta checklist:
+Basic release checklist:
 
 ```bash
 xcodebuild -project DadCloner.xcodeproj -scheme DadCloner -configuration Release clean build
@@ -79,13 +89,21 @@ IDENTITY="Developer ID Application: Your Name (TEAMID)"
 codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP/Contents/Resources/rsync"
 codesign --force --options runtime --timestamp --entitlements DadCloner/DadCloner.entitlements --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
-ditto -c -k --keepParent "$APP" DadCloner-0.1-beta.zip
-xcrun notarytool submit DadCloner-0.1-beta.zip --keychain-profile "notarytool-profile" --wait
+ditto -c -k --keepParent "$APP" DadCloner-1.0.zip
+xcrun notarytool submit DadCloner-1.0.zip --keychain-profile "notarytool-profile" --wait
 xcrun stapler staple "$APP"
 spctl --assess --type execute --verbose=4 "$APP"
 ```
 
 Do not ship a "Sign to Run Locally" build. The release artifact should show a Developer ID signature and a successful notarization result.
+
+After notarizing, sign the zip for Sparkle and add an `<item>` to `appcast.xml`:
+
+```bash
+sign_update DadCloner-1.0.zip   # from Sparkle's bin/, prints edSignature + length
+```
+
+Commit the updated `appcast.xml` to `main` — the app reads it from GitHub raw.
 
 ## License
 
