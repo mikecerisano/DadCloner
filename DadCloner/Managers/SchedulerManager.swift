@@ -40,6 +40,7 @@ final class SchedulerManager {
         }
 
         guard !config.isSchedulePaused else {
+            isScheduleEnabled = false
             logger.info("Scheduler not started - automatic backups are paused")
             return
         }
