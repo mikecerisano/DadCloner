@@ -644,7 +644,7 @@ struct SetupView: View {
         } else {
             config.restore(previous)
             config.isConfigured = wasConfigured
-            showError(message: "Failed to complete setup. Please try again.")
+            showError(message: "Couldn't set up \(backup.name) as the backup drive. Make sure it's connected and not read-only, then try again.")
             isFinishing = false
         }
     }

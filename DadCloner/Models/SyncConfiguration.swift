@@ -291,7 +291,7 @@ final class SyncConfiguration {
             isConfigured = true
             return true
         } catch {
-            print("Failed to finalize configuration: \(error)")
+            SyncLogger.shared.error("Setup could not prepare the backup drive", details: error.localizedDescription)
             return false
         }
     }
@@ -472,7 +472,7 @@ final class SyncConfiguration {
             applyBackupFolderLabel()
             return true
         } catch {
-            print("Failed to create backup folder: \(error)")
+            SyncLogger.shared.error("Could not create the backup folder", details: error.localizedDescription)
             return false
         }
     }

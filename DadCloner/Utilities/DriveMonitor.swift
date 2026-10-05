@@ -177,13 +177,8 @@ final class DriveMonitor {
     /// Get UUID for a volume at the given path
     static func getVolumeUUID(at path: String) -> String? {
         let url = URL(fileURLWithPath: path)
-        do {
-            let resourceValues = try url.resourceValues(forKeys: [.volumeUUIDStringKey])
-            return resourceValues.volumeUUIDString
-        } catch {
-            print("Error getting UUID for \(path): \(error)")
-            return nil
-        }
+        // Fails routinely while a drive is unplugged; nil means "not here".
+        return try? url.resourceValues(forKeys: [.volumeUUIDStringKey]).volumeUUIDString
     }
 
     /// Get volume info for a path

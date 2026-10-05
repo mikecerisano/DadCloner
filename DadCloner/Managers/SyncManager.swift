@@ -787,7 +787,6 @@ enum SyncError: LocalizedError {
     case rsyncFailed(String)
     case verificationFailed(String)
     case insufficientSpace(String)
-    case lockFailed
     case cancelled
 
     var errorDescription: String? {
@@ -804,8 +803,6 @@ enum SyncError: LocalizedError {
             return "Verification error: \(message)"
         case .insufficientSpace(let message):
             return "Backup drive is low on space: \(message)"
-        case .lockFailed:
-            return "Could not acquire sync lock"
         case .cancelled:
             return "Backup was stopped before it finished"
         }
