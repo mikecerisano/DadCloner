@@ -18,5 +18,18 @@
                 type="application/octet-stream"/>
         </item>
         -->
+        <item>
+            <title>1.1</title>
+            <pubDate>Mon, 05 Oct 2026 19:00:00 +0000</pubDate>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>1.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink>https://github.com/mikecerisano/DadCloner/releases/tag/v1.1</sparkle:releaseNotesLink>
+            <enclosure
+                url="https://github.com/mikecerisano/DadCloner/releases/download/v1.1/DadCloner-1.1.zip"
+                sparkle:edSignature="lwfMNJbN2GrW3QjBxCvFKbwCCEhlyVRfcgVz9OqjXS1OzGWGSChVMbuGL0oT0p/Ms6dAIPG6LFffFde2V7ynAg=="
+                length="2826248"
+                type="application/octet-stream"/>
+        </item>
     </channel>
 </rss>
