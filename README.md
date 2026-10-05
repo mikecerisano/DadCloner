@@ -14,7 +14,7 @@ My dad's 75 and has decades of recording sessions and jingles on external drives
 
 Download the latest release from the [GitHub Releases page](https://github.com/mikecerisano/DadCloner/releases).
 
-DadCloner 1.0 updates itself: when a new version ships, the app offers the update automatically.
+DadCloner updates itself: when a new version ships, the app offers the update automatically.
 
 ## How it works
 
