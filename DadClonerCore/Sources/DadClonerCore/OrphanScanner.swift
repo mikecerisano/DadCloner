@@ -5,24 +5,16 @@ import Foundation
 /// directories left empty after their contents were archived.
 public struct OrphanScanner {
 
-    /// Entries never treated as orphans: our own metadata plus macOS
-    /// volume system directories. Hidden *user* files are intentionally
-    /// NOT skipped — rsync copies them, so we must archive them too.
-    // NOTE: "DadCloner_Archive" and ".dadcloner_backup" below must stay in
-    // sync with SyncConfiguration.archiveDirectoryName / backupMarkerFilename
-    // in the app target. DadClonerCore has no dependency on the app, so this
-    // is enforced by convention — if you rename either there, update it here.
-    public static let skipPaths: Set<String> = [
-        "DadCloner_Archive",
-        ".dadcloner_backup",
-        ".DS_Store",
-        ".Spotlight-V100",
-        ".fseventsd",
-        ".Trashes",
-        ".TemporaryItems",
-        ".DocumentRevisions-V100",
-        ".PKInstallSandboxManager-SystemSoftware"
-    ]
+    /// Entry names never treated as orphans, at any depth. Matches rsync's
+    /// unanchored `--exclude` semantics.
+    public static let skipNames: Set<String> = BackupLayout.excludedNames
+
+    public struct ScanResult: Equatable, Sendable {
+        /// Relative paths of orphaned files and symlinks.
+        public var orphaned: [String]
+        /// Number of files and symlinks examined in the backup.
+        public var scannedFileCount: Int
+    }
 
     private let fileManager: FileManager
 
@@ -33,21 +25,26 @@ public struct OrphanScanner {
     /// Relative paths of regular files and symlinks that exist under
     /// `backupPath` but not under `sourcePath`.
     public func findOrphanedFiles(backupPath: String, sourcePath: String) throws -> [String] {
-        var orphaned: [String] = []
+        try scan(backupPath: backupPath, sourcePath: sourcePath).orphaned
+    }
+
+    /// Like `findOrphanedFiles`, but also reports how many backup files were
+    /// examined so callers can sanity-check the orphan count.
+    public func scan(backupPath: String, sourcePath: String) throws -> ScanResult {
+        var result = ScanResult(orphaned: [], scannedFileCount: 0)
 
         guard let enumerator = fileManager.enumerator(
             at: URL(fileURLWithPath: backupPath),
             includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey],
             options: [] // include hidden files
         ) else {
-            return []
+            return result
         }
 
         for case let fileURL as URL in enumerator {
             guard let relativePath = relativePath(of: fileURL.path, under: backupPath) else { continue }
 
-            let firstComponent = relativePath.components(separatedBy: "/").first ?? ""
-            if OrphanScanner.skipPaths.contains(firstComponent) {
+            if OrphanScanner.skipNames.contains(fileURL.lastPathComponent) {
                 if (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
                     enumerator.skipDescendants()
                 }
@@ -61,13 +58,14 @@ public struct OrphanScanner {
                 continue
             }
 
+            result.scannedFileCount += 1
             let sourceFile = (sourcePath as NSString).appendingPathComponent(relativePath)
             if !itemExists(atPath: sourceFile) {
-                orphaned.append(relativePath)
+                result.orphaned.append(relativePath)
             }
         }
 
-        return orphaned
+        return result
     }
 
     /// Removes directories under `backupPath` that no longer exist under
@@ -95,8 +93,7 @@ public struct OrphanScanner {
             }
             guard let relativePath = relativePath(of: fileURL.path, under: backupPath) else { continue }
 
-            let firstComponent = relativePath.components(separatedBy: "/").first ?? ""
-            if OrphanScanner.skipPaths.contains(firstComponent) {
+            if OrphanScanner.skipNames.contains(fileURL.lastPathComponent) {
                 enumerator.skipDescendants()
                 continue
             }
@@ -109,6 +106,7 @@ public struct OrphanScanner {
         for directory in candidates.sorted(by: { $0.count > $1.count }) {
             do {
                 let contents = try fileManager.contentsOfDirectory(atPath: directory)
+                    .filter { $0 != ".DS_Store" }
                 if contents.isEmpty {
                     try fileManager.removeItem(atPath: directory)
                     removed.append(directory)
@@ -132,11 +130,15 @@ public struct OrphanScanner {
         return relative
     }
 
-    /// True if a file, directory, or symlink (even dangling) exists at path.
+    /// False only when the source definitely has nothing at `path`
+    /// (ENOENT / ENOTDIR). Any other error — permission denied, a macOS
+    /// privacy block, an I/O error on a failing disk — counts as present,
+    /// so an unreadable file is never mistaken for a deleted one.
     private func itemExists(atPath path: String) -> Bool {
-        if fileManager.fileExists(atPath: path) {
+        var info = stat()
+        if lstat(path, &info) == 0 {
             return true
         }
-        return (try? fileManager.destinationOfSymbolicLink(atPath: path)) != nil
+        return errno != ENOENT && errno != ENOTDIR
     }
 }

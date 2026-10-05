@@ -69,3 +69,23 @@ final class RsyncOutputTests: XCTestCase {
         XCTAssertEqual(RsyncOutput.fileCount(fromItemized: output), 3)
     }
 }
+
+final class RsyncErrorLinesTests: XCTestCase {
+    func testErrorLinesKeepsRsyncLinesAndDropsSummary() {
+        let stderr = """
+        rsync: [sender] send_files failed to open "/a/b": Permission denied (13)
+        some other noise
+          rsync: [generator] failed to set times on "/x": Operation not permitted (1)
+        rsync error: some files/attrs were not transferred (see previous errors) (code 23) at main.c(1)
+        rsync: some files/attrs were not transferred (see previous errors)
+        """
+        XCTAssertEqual(RsyncOutput.errorLines(fromStderr: stderr), [
+            "rsync: [sender] send_files failed to open \"/a/b\": Permission denied (13)",
+            "rsync: [generator] failed to set times on \"/x\": Operation not permitted (1)"
+        ])
+    }
+
+    func testErrorLinesEmpty() {
+        XCTAssertEqual(RsyncOutput.errorLines(fromStderr: ""), [])
+    }
+}

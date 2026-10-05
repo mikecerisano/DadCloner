@@ -10,19 +10,19 @@ final class LaunchAtLogin {
 
     // MARK: - Properties
 
+    /// Last known registration status. Stored (not read through to
+    /// SMAppService on every access) so SwiftUI sees changes.
+    private(set) var status: SMAppService.Status = SMAppService.mainApp.status
+
     /// Whether the app is set to launch at login
     var isEnabled: Bool {
-        get {
-            if #available(macOS 13.0, *) {
-                return SMAppService.mainApp.status == .enabled
-            } else {
-                // Fallback for older macOS - check UserDefaults as proxy
-                return UserDefaults.standard.bool(forKey: "launchAtLogin")
-            }
-        }
-        set {
-            setLaunchAtLogin(enabled: newValue)
-        }
+        get { status == .enabled }
+        set { setLaunchAtLogin(enabled: newValue) }
+    }
+
+    /// macOS needs the user to allow the login item in System Settings.
+    var requiresApproval: Bool {
+        status == .requiresApproval
     }
 
     // MARK: - Initialization
@@ -31,25 +31,31 @@ final class LaunchAtLogin {
 
     // MARK: - Methods
 
+    /// Re-read the status (the user may have changed it in System Settings).
+    func refresh() {
+        status = SMAppService.mainApp.status
+    }
+
     /// Enable or disable launch at login
     func setLaunchAtLogin(enabled: Bool) {
-        if #available(macOS 13.0, *) {
-            do {
-                if enabled {
-                    try SMAppService.mainApp.register()
-                    print("Registered as login item")
-                } else {
-                    try SMAppService.mainApp.unregister()
-                    print("Unregistered as login item")
-                }
-            } catch {
-                print("Failed to \(enabled ? "register" : "unregister") login item: \(error)")
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
             }
-        } else {
-            // Fallback for older macOS versions
-            // Store preference (actual registration would need LSSharedFileList)
-            UserDefaults.standard.set(enabled, forKey: "launchAtLogin")
+        } catch {
+            SyncLogger.shared.warning(
+                "Could not \(enabled ? "turn on" : "turn off") Start at Login",
+                details: error.localizedDescription
+            )
         }
+        refresh()
+    }
+
+    /// Open the Login Items pane so the user can approve the app.
+    func openLoginItemsSettings() {
+        SMAppService.openSystemSettingsLoginItems()
     }
 
     /// Enable launch at login (convenience method for setup)

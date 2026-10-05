@@ -21,6 +21,22 @@ public enum BackupPolicy {
         return now.timeIntervalSince(lastAttempt) > retryInterval
     }
 
+    /// Archiving at least this many files at once needs the user's OK.
+    public static let massArchiveFileCount = 1000
+    /// ...as does archiving at least this fraction of the backup
+    /// (once at least `massArchiveMinimumCount` files are involved).
+    public static let massArchiveFraction = 0.25
+    public static let massArchiveMinimumCount = 50
+
+    /// Whether this many orphans looks less like normal housekeeping and
+    /// more like an unreadable or wrong source (a dying drive, a permission
+    /// problem) or a large reorganization the user should confirm.
+    public static func isMassArchive(orphaned: Int, scanned: Int) -> Bool {
+        if orphaned >= massArchiveFileCount { return true }
+        guard orphaned >= massArchiveMinimumCount, scanned > 0 else { return false }
+        return Double(orphaned) / Double(scanned) >= massArchiveFraction
+    }
+
     /// The next time the daily schedule occurs strictly after `date`.
     public static func nextOccurrence(hour: Int, minute: Int, after date: Date, calendar: Calendar) -> Date? {
         var components = calendar.dateComponents([.year, .month, .day], from: date)

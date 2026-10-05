@@ -127,9 +127,17 @@ final class SyncLogger {
     /// ...keeping roughly this much of the newest content.
     private let logKeepBytes = 256 * 1024
 
+    /// Lives on the Mac (~/Library/Logs/DadCloner), not the backup drive,
+    /// so the reason a backup failed is readable even when the drive isn't
+    /// connected.
+    private var logDirectory: String {
+        let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library")
+        return library.appendingPathComponent("Logs/DadCloner").path
+    }
+
     private var logFilePath: String {
-        let archivePath = SyncConfiguration.shared.archivePath
-        return (archivePath as NSString).appendingPathComponent(logFilename)
+        (logDirectory as NSString).appendingPathComponent(logFilename)
     }
 
     // MARK: - Initialization
@@ -228,10 +236,9 @@ final class SyncLogger {
         do {
             let fileManager = FileManager.default
 
-            // Ensure archive directory exists
-            let archivePath = SyncConfiguration.shared.archivePath
-            if !fileManager.fileExists(atPath: archivePath) {
-                try fileManager.createDirectory(atPath: archivePath, withIntermediateDirectories: true)
+            // Ensure log directory exists
+            if !fileManager.fileExists(atPath: logDirectory) {
+                try fileManager.createDirectory(atPath: logDirectory, withIntermediateDirectories: true)
             }
 
             // Append or create log file
