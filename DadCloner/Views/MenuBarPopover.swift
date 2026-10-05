@@ -34,6 +34,70 @@ enum MenuBarStatus {
             return .red
         }
     }
+
+    var nsColor: NSColor {
+        switch self {
+        case .ready: return .systemGreen
+        case .warning: return .systemOrange
+        case .syncing: return .systemGray
+        case .error: return .systemRed
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .ready: return "Ready"
+        case .warning: return "Warning"
+        case .syncing: return "Syncing"
+        case .error: return "Error"
+        }
+    }
+
+    /// The one place app status is decided; used by both the menu bar
+    /// icon and the popover.
+    @MainActor
+    static func current() -> MenuBarStatus {
+        current(sync: .shared, config: .shared, drives: .shared)
+    }
+
+    @MainActor
+    static func current(
+        sync: SyncManager,
+        config: SyncConfiguration,
+        drives: DriveMonitor
+    ) -> MenuBarStatus {
+        if sync.status.isRunning {
+            return .syncing
+        }
+
+        if !config.isConfigured {
+            return .warning
+        }
+
+        // An unplugged drive is normal; a wrong or unusable one is not.
+        for status in [drives.sourceStatus, drives.backupStatus] where !status.isValid {
+            if status != .notMounted {
+                return .error
+            }
+        }
+        if !drives.areDrivesReady {
+            return .warning
+        }
+
+        if config.isBackupOverdue {
+            return .warning
+        }
+
+        if config.lastSyncAttemptDate != nil && !config.lastSyncSuccess {
+            return .warning
+        }
+
+        if config.lastSyncWarning != nil {
+            return .warning
+        }
+
+        return .ready
+    }
 }
 
 /// Main popover view shown when clicking the menu bar icon
@@ -114,30 +178,7 @@ struct MenuBarPopover: View {
     // MARK: - Status Calculation
 
     private var currentStatus: MenuBarStatus {
-        if syncManager.status.isRunning {
-            return .syncing
-        }
-
-        if !config.isConfigured {
-            return .warning
-        }
-
-        if !driveMonitor.areDrivesReady {
-            if !driveMonitor.sourceStatus.isValid || !driveMonitor.backupStatus.isValid {
-                return .error
-            }
-            return .warning
-        }
-
-        if config.isBackupOverdue {
-            return .warning
-        }
-
-        if !config.lastSyncSuccess && config.lastSyncDate != nil {
-            return .warning
-        }
-
-        return .ready
+        MenuBarStatus.current(sync: syncManager, config: config, drives: driveMonitor)
     }
 
     // MARK: - Header Section
@@ -180,6 +221,12 @@ struct MenuBarPopover: View {
                         Text(error)
                             .font(.caption2)
                             .foregroundColor(.red)
+                            .lineLimit(5)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if let warning = config.lastSyncWarning {
+                        Text(warning)
+                            .font(.caption2)
+                            .foregroundColor(.orange)
                             .lineLimit(3)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -287,6 +334,20 @@ struct MenuBarPopover: View {
             .buttonStyle(.borderedProminent)
             .disabled(syncManager.status.isRunning || !driveMonitor.areDrivesReady)
 
+            // Large archive waiting for the user's OK
+            if let request = syncManager.pendingMassArchive, !syncManager.status.isRunning {
+                Button(action: confirmMassArchive) {
+                    HStack {
+                        Image(systemName: "archivebox")
+                        Text("Archive & Back Up (\(request.orphanedCount) files)")
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!driveMonitor.areDrivesReady)
+            }
+
             // Progress bar if syncing
             if syncManager.status.isRunning {
                 ProgressView(value: syncManager.currentProgress)
@@ -380,6 +441,7 @@ struct MenuBarPopover: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundColor(.secondary)
+                    .disabled(syncManager.status.isRunning)
                 }
             }
         }
@@ -393,6 +455,14 @@ struct MenuBarPopover: View {
         }
     }
 
+    private func confirmMassArchive() {
+        Task {
+            await scheduler.triggerManualSync(
+                confirmedMassArchiveCount: syncManager.pendingMassArchive?.orphanedCount
+            )
+        }
+    }
+
     private func openArchive() {
         let archivePath = config.archivePath
         if FileManager.default.fileExists(atPath: archivePath) {
@@ -401,6 +471,7 @@ struct MenuBarPopover: View {
     }
 
     private func resetConfiguration() {
+        guard !syncManager.status.isRunning else { return }
         scheduler.stop()
         config.resetConfiguration()
         // App will show setup view since isConfigured is now false

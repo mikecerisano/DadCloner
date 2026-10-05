@@ -44,4 +44,12 @@ public enum RsyncOutput {
     public static func fileCount(fromItemized output: String) -> Int {
         output.components(separatedBy: "\n").filter { isFileLine($0) }.count
     }
+
+    /// Per-file error lines from rsync's stderr (e.g. permission denied),
+    /// excluding the generic end-of-run summary.
+    public static func errorLines(fromStderr output: String) -> [String] {
+        output.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.hasPrefix("rsync:") && !$0.contains("some files/attrs were not transferred") }
+    }
 }

@@ -4,7 +4,8 @@ import UserNotifications
 
 /// Initial setup wizard for configuring backup drives
 struct SetupView: View {
-    @Environment(\.dismiss) private var dismiss
+    /// Called after setup completes, to close the hosting window.
+    var onFinish: () -> Void = {}
 
     @State private var currentStep: SetupStep = .welcome
     @State private var sourceVolume: VolumeInfo?
@@ -66,7 +67,20 @@ struct SetupView: View {
         }
         .onAppear {
             driveMonitor.refreshMountedVolumes()
+            // Re-running setup (Change Drives) keeps the current schedule.
+            if config.isConfigured {
+                scheduleHour = config.scheduleHour
+                scheduleMinute = config.scheduleMinute
+            }
         }
+    }
+
+    /// Re-running setup with a different source while keeping the backup
+    /// drive: the old source's files in the backup will look deleted.
+    private var isReplacingSource: Bool {
+        guard config.isConfigured,
+              let source = sourceVolume, let backup = backupVolume else { return false }
+        return source.id != config.sourceDriveUUID && backup.id == config.backupDriveUUID
     }
 
     // MARK: - Permissions
@@ -259,7 +273,7 @@ struct SetupView: View {
                     .font(.title2)
 
                 Picker("Minute", selection: $scheduleMinute) {
-                    ForEach([0, 15, 30, 45], id: \.self) { minute in
+                    ForEach(minuteOptions, id: \.self) { minute in
                         Text(String(format: "%02d", minute)).tag(minute)
                     }
                 }
@@ -268,7 +282,7 @@ struct SetupView: View {
             }
             .padding(.top, 20)
 
-            Text("We recommend early morning (like 2:00 AM) when you're not using the computer.")
+            Text("We recommend early morning (like 2:00 AM) when you're not using the computer. If your Mac is asleep then, the backup runs as soon as it wakes up.")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -277,6 +291,12 @@ struct SetupView: View {
 
             Spacer()
         }
+    }
+
+    /// Quarter hours, plus the current minute if it was set to something
+    /// else in Settings (so the picker never shows a blank selection).
+    private var minuteOptions: [Int] {
+        Array(Set([0, 15, 30, 45, scheduleMinute])).sorted()
     }
 
     private func formatHour(_ hour: Int) -> String {
@@ -345,12 +365,20 @@ struct SetupView: View {
             VStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle")
                     .foregroundColor(.orange)
-                Text("Once configured, these settings cannot be easily changed.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("Make sure you've selected the correct drives!")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                if isReplacingSource {
+                    Text("You're switching to a different source drive. Files from the old source that are in the backup will be moved to the archive (DadCloner will ask before moving a large number).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                } else {
+                    Text("Make sure you've selected the correct drives!")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("You can change them later in Settings.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
             .padding(.top, 10)
 
@@ -587,6 +615,11 @@ struct SetupView: View {
 
         isFinishing = true
 
+        // Keep the previous setup so a failure leaves it intact
+        let previous = config.currentDriveSelection()
+        let wasConfigured = config.isConfigured
+        let backupChanged = backup.id != config.backupDriveUUID
+
         // Configure the sync
         config.configureSourceDrive(path: source.path, uuid: source.id, name: source.name)
         config.configureBackupDrive(path: backup.path, uuid: backup.id, name: backup.name)
@@ -595,6 +628,9 @@ struct SetupView: View {
 
         // Finalize (creates marker file and archive directory)
         if config.finalizeConfiguration() {
+            if backupChanged {
+                config.clearSyncHistory()
+            }
             requestNotificationPermission()
 
             // Start the scheduler
@@ -604,8 +640,10 @@ struct SetupView: View {
             LaunchAtLogin.shared.enable()
 
             // Close the setup window
-            dismiss()
+            onFinish()
         } else {
+            config.restore(previous)
+            config.isConfigured = wasConfigured
             showError(message: "Failed to complete setup. Please try again.")
             isFinishing = false
         }

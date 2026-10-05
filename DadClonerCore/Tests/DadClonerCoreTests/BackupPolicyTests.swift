@@ -80,3 +80,27 @@ final class BackupPolicyTests: XCTestCase {
             date(2026, 7, 2, 2, 0))
     }
 }
+
+final class MassArchiveTests: XCTestCase {
+    func testThousandOrMoreAlwaysMass() {
+        XCTAssertTrue(BackupPolicy.isMassArchive(orphaned: 1000, scanned: 1_000_000))
+        XCTAssertTrue(BackupPolicy.isMassArchive(orphaned: 5000, scanned: 0))
+    }
+
+    func testBelowFiftyNeverMass() {
+        XCTAssertFalse(BackupPolicy.isMassArchive(orphaned: 49, scanned: 49))
+        XCTAssertFalse(BackupPolicy.isMassArchive(orphaned: 0, scanned: 0))
+        XCTAssertFalse(BackupPolicy.isMassArchive(orphaned: 10, scanned: 10))
+    }
+
+    func testBetweenUsesQuarterFraction() {
+        XCTAssertTrue(BackupPolicy.isMassArchive(orphaned: 50, scanned: 200))
+        XCTAssertFalse(BackupPolicy.isMassArchive(orphaned: 50, scanned: 201))
+        XCTAssertTrue(BackupPolicy.isMassArchive(orphaned: 999, scanned: 1000))
+        XCTAssertFalse(BackupPolicy.isMassArchive(orphaned: 999, scanned: 10_000))
+    }
+
+    func testScannedZeroInBetweenIsFalse() {
+        XCTAssertFalse(BackupPolicy.isMassArchive(orphaned: 100, scanned: 0))
+    }
+}

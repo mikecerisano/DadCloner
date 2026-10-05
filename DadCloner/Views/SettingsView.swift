@@ -9,6 +9,7 @@ struct SettingsView: View {
 
     @State private var config = SyncConfiguration.shared
     @State private var scheduler = SchedulerManager.shared
+    @State private var launchAtLogin = LaunchAtLogin.shared
     @State private var scheduleTime: Date = Date()
 
     var body: some View {
@@ -50,9 +51,22 @@ struct SettingsView: View {
                     ))
 
                     Toggle("Start at login", isOn: Binding(
-                        get: { LaunchAtLogin.shared.isEnabled },
-                        set: { LaunchAtLogin.shared.isEnabled = $0 }
+                        get: { launchAtLogin.isEnabled },
+                        set: { launchAtLogin.isEnabled = $0 }
                     ))
+
+                    if launchAtLogin.requiresApproval {
+                        HStack {
+                            Text("Allow DadCloner in Login Items to finish turning this on.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Button("Open Settings") {
+                                launchAtLogin.openLoginItemsSettings()
+                            }
+                            .font(.caption)
+                        }
+                    }
                 }
 
                 Section("Drives") {
@@ -63,6 +77,7 @@ struct SettingsView: View {
                         dismiss()
                         (NSApp.delegate as? AppDelegate)?.showSetupWindow()
                     }
+                    .disabled(SyncManager.shared.status.isRunning)
                 }
 
                 Section("Updates") {
@@ -79,6 +94,7 @@ struct SettingsView: View {
         }
         .frame(width: 380, height: 420)
         .onAppear {
+            launchAtLogin.refresh()
             var components = DateComponents()
             components.hour = config.scheduleHour
             components.minute = config.scheduleMinute

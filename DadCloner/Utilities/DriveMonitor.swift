@@ -47,8 +47,8 @@ enum DriveValidationResult: Equatable {
             return "Drive is valid"
         case .notMounted:
             return "Drive is not mounted"
-        case .wrongDrive(let uuid):
-            return "Wrong drive mounted (UUID: \(uuid))"
+        case .wrongDrive:
+            return "A different drive is connected in its place"
         case .notReadable:
             return "Drive is not readable"
         case .notWritable:
@@ -161,6 +161,13 @@ final class DriveMonitor {
         }
 
         mountedVolumes = volumes.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+        // Follow configured drives if macOS remounted them at a new path
+        if SyncConfiguration.shared.isConfigured {
+            for change in SyncConfiguration.shared.reconcileDrivePaths(mountedVolumes: mountedVolumes) {
+                SyncLogger.shared.info(change)
+            }
+        }
 
         // Update validation status
         validateDrives()
@@ -292,18 +299,10 @@ final class DriveMonitor {
             return .wrongDrive(mountedUUID: currentUUID)
         }
 
-        // Ensure backup destination folder exists (create if needed)
-        if !FileManager.default.fileExists(atPath: destinationPath) {
-            guard FileManager.default.isWritableFile(atPath: path) else {
-                return .notWritable
-            }
-            guard config.ensureBackupDestinationFolder() else {
-                return .backupFolderMissing
-            }
-        }
-
-        // Check writability
-        guard FileManager.default.isWritableFile(atPath: destinationPath) else {
+        // Check writability. A missing destination folder is fine as long as
+        // it can be created; the sync creates it (status checks never write).
+        let writableTarget = FileManager.default.fileExists(atPath: destinationPath) ? destinationPath : path
+        guard FileManager.default.isWritableFile(atPath: writableTarget) else {
             return .notWritable
         }
 

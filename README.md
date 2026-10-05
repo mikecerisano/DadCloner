@@ -20,11 +20,14 @@ DadCloner 1.0 updates itself: when a new version ships, the app offers the updat
 
 Pick a source drive. Pick a backup drive. Set a schedule. Done.
 
-The app syncs changes automatically using the bundled `rsync` binary. If a file gets removed from the source, the backed-up copy moves to a `DadCloner_Archive` folder on the backup instead of disappearing forever.
+The app syncs changes automatically using the bundled `rsync` binary. If a file gets removed from the source, the backed-up copy moves to a `DadCloner_Archive` folder on the backup instead of disappearing forever. If a file changes, the previous backed-up version is moved to the archive before the new one is copied, so a corrupted or accidentally saved-over file can't wipe out the last good copy.
 
 Everything lives in a `DadCloner Backup` folder on your destination drive:
-- Mirrored files from source
-- `DadCloner_Archive/` subfolder for anything that got removed
+- Mirrored files from source, including resource forks, Finder info, and other extended attributes (important for classic Mac OS files like Sound Designer II audio)
+- `DadCloner_Archive/YYYY-MM-DD/` for anything that got removed
+- `DadCloner_Archive/YYYY-MM-DD replaced HH.MM.SS/` for previous versions of changed files
+
+If an unusually large number of backed-up files suddenly disappear from the source (an unreadable or failing drive, or a big reorganization), DadCloner stops and asks before archiving them.
 
 ## Features
 
@@ -33,10 +36,13 @@ Everything lives in a `DadCloner Backup` folder on your destination drive:
 - Exact drive matching by volume UUID
 - Free-space preflight before a backup starts
 - Catch-up sync after missed schedules, including right after the Mac wakes from sleep
+- If the drives aren't connected at backup time, it waits quietly and backs up when they're plugged in
+- Files that can't be copied (permissions, etc.) are reported without failing the whole backup
+- Follows drives by UUID even if macOS remounts them at a different path
 - Settings for changing the schedule, pausing backups, or re-picking drives after setup
 - Failure reasons shown right in the menu bar popover
 - Built-in updates via Sparkle
-- Sync log capped at 512 KB so it never grows unbounded
+- Sync log in `~/Library/Logs/DadCloner`, capped at 512 KB so it never grows unbounded
 - Visible status for mounted drives, running syncs, and failures
 - Notarized Developer ID builds
 - Bundled `rsync` 3.2.7; no Homebrew required
@@ -70,7 +76,7 @@ In Xcode:
 3. Set your **Team** to your Apple Developer account (or Personal Team for local builds)
 4. Build and run
 
-Core logic (rsync output parsing, schedule math, orphan scanning, log rotation) lives in the `DadClonerCore` Swift package. Run its tests with:
+Core logic (rsync arguments and output parsing, schedule math, orphan scanning, archiving, log rotation) lives in the `DadClonerCore` Swift package. Run its tests with:
 
 ```bash
 swift test --package-path DadClonerCore

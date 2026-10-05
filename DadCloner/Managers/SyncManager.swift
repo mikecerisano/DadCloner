@@ -6,6 +6,7 @@ import DadClonerCore
 enum SyncStatus: Equatable {
     case idle
     case validating
+    case scanning
     case archiving
     case syncing
     case finishing
@@ -27,6 +28,8 @@ enum SyncStatus: Equatable {
             return "Ready"
         case .validating:
             return "Validating drives..."
+        case .scanning:
+            return "Checking for changes..."
         case .archiving:
             return "Archiving deleted files..."
         case .syncing:
@@ -41,7 +44,18 @@ enum SyncStatus: Equatable {
     }
 }
 
-/// Core sync manager - handles all backup operations with safety checks
+/// A sync stopped because an unusually large number of backed-up files
+/// are missing from the source. The user must confirm before they move.
+struct MassArchiveRequest: Equatable {
+    let orphanedCount: Int
+    let scannedCount: Int
+}
+
+/// Core sync manager - handles all backup operations with safety checks.
+///
+/// Main-actor isolated: all observable state is mutated on the main thread.
+/// Long filesystem walks run in detached tasks and hand back plain values.
+@MainActor
 @Observable
 final class SyncManager {
 
@@ -59,27 +73,49 @@ final class SyncManager {
     private(set) var filesArchived: Int = 0
     private(set) var currentFile: String = ""
 
+    /// Set when the last sync stopped for mass-archive confirmation.
+    private(set) var pendingMassArchive: MassArchiveRequest?
+
     /// Lock file to prevent concurrent syncs
-    private var lockFileHandle: FileHandle?
+    @ObservationIgnored private var lockFileHandle: FileHandle?
     private var lockFilePath: String {
         let tempDir = NSTemporaryDirectory()
         return (tempDir as NSString).appendingPathComponent("dadcloner.lock")
     }
 
-    private let fileManager = FileManager.default
-    private let logger = SyncLogger.shared
-    private let config = SyncConfiguration.shared
-    private let driveMonitor = DriveMonitor.shared
+    @ObservationIgnored private var currentProcess: Process?
+    @ObservationIgnored private var isCancelling = false
+    @ObservationIgnored private var runWhenIdle: [() -> Void] = []
+
+    @ObservationIgnored private let fileManager = FileManager.default
+    @ObservationIgnored private let logger = SyncLogger.shared
+    @ObservationIgnored private let config = SyncConfiguration.shared
+    @ObservationIgnored private let driveMonitor = DriveMonitor.shared
+
+    /// Configuration captured at the start of a sync, so changing drives
+    /// (or resetting) mid-run can't redirect a sync that's already going.
+    private struct SyncPaths {
+        let source: String
+        let sourceUUID: String
+        let sourceName: String
+        let backupDrive: String
+        let backupUUID: String
+        let backupName: String
+        let destination: String
+        let archive: String
+        let marker: String
+    }
 
     // MARK: - Initialization
     private init() {}
 
     // MARK: - Main Sync Operation
 
-    /// Perform a full sync operation
-    /// This is the main entry point for backup operations
-    @MainActor
-    func performSync() async -> Bool {
+    /// Perform a full sync operation.
+    /// - Parameter confirmedMassArchiveCount: the user confirmed archiving
+    ///   this many files (see `MassArchiveRequest`). A noticeably larger
+    ///   count found now still needs a fresh confirmation.
+    func performSync(confirmedMassArchiveCount: Int? = nil) async -> Bool {
         // Prevent concurrent syncs
         guard !status.isRunning else {
             logger.warning("Sync already in progress, skipping")
@@ -97,117 +133,193 @@ final class SyncManager {
             releaseLock()
         }
 
+        // Keep the Mac from idle-sleeping (and the app from being napped)
+        // while a long copy is running.
+        let activity = ProcessInfo.processInfo.beginActivity(
+            options: [.idleSystemSleepDisabled, .suddenTerminationDisabled, .automaticTerminationDisabled],
+            reason: "Backing up files"
+        )
+        defer { ProcessInfo.processInfo.endActivity(activity) }
+
+        // Refresh first: this may follow a remounted drive to its new path.
+        driveMonitor.refreshMountedVolumes()
+
+        let paths = SyncPaths(
+            source: config.sourceDrivePath,
+            sourceUUID: config.sourceDriveUUID,
+            sourceName: config.sourceDriveName,
+            backupDrive: config.backupDrivePath,
+            backupUUID: config.backupDriveUUID,
+            backupName: config.backupDriveName,
+            destination: config.backupDestinationPath,
+            archive: config.archivePath,
+            marker: config.backupMarkerPath
+        )
+
         // Start logging session
         _ = logger.startSession()
 
         var success = false
+        var skippedItems: [String] = []
+        var notes: [String] = []
+        isCancelling = false
+        pendingMassArchive = nil
+        filesProcessed = 0
+        filesArchived = 0
+        currentFile = ""
 
         do {
-            filesProcessed = 0
-            filesArchived = 0
-            currentFile = ""
-
             // Step 1: Validate drives
             status = .validating
+            currentProgress = 0.02
+            try validateDrives(paths)
+
+            // Step 2: Dry run. Proves the source is readable and sizes the
+            // transfer *before* anything on the backup is moved.
+            status = .scanning
             currentProgress = 0.05
-            try await validateDrives()
+            try await dryRun(paths)
 
-            // Step 2: Archive deleted files
+            // Step 3: Archive files deleted from the source. A suspiciously
+            // large batch is held for confirmation, but the backup of new
+            // and changed files still goes ahead.
             status = .archiving
-            currentProgress = 0.1
-            try await archiveDeletedFiles()
+            currentProgress = 0.15
+            if let note = try await archiveDeletedFiles(paths, confirmedMassArchiveCount: confirmedMassArchiveCount) {
+                notes.append(note)
+            }
 
-            // Step 3: Perform rsync
+            // Step 4: Perform rsync
             status = .syncing
             currentProgress = 0.3
-            try await performRsync()
+            skippedItems = try await performRsync(paths)
 
-            // Step 4: Verify and finish
+            // Step 5: Verify and finish
             status = .finishing
             currentProgress = 0.95
-            try await verifySync()
+            try verifySync(paths)
 
             success = true
             status = .completed
             currentProgress = 1.0
 
-            // Record success
-            config.recordSyncResult(success: true)
-            logger.success("Sync completed: \(filesProcessed) files updated, \(filesArchived) files archived")
+            if !skippedItems.isEmpty {
+                notes.append(Self.partialSummary(skippedItems))
+            }
+            let warning = notes.isEmpty ? nil : notes.joined(separator: " ")
+            let isNewWarning = warning != config.lastSyncWarning
+            recordResult(paths, success: true, warning: warning)
 
-            // Send notification
-            await sendNotification(
-                title: "Backup Complete",
-                body: "Successfully synced \(filesProcessed) file(s), archived \(filesArchived) file(s)"
-            )
-
-        } catch let error as SyncError {
-            status = .failed(error.localizedDescription)
-            logger.error("Sync failed", details: error.localizedDescription)
-            config.recordSyncResult(success: false, error: error.localizedDescription)
-
-            await sendNotification(
-                title: "Backup Failed",
-                body: error.localizedDescription
-            )
+            if let warning {
+                logger.warning("Sync completed with warnings: \(filesProcessed) files updated, \(filesArchived) files archived", details: (notes + skippedItems).joined(separator: "\n"))
+                if isNewWarning {
+                    await sendNotification(title: "Backup Finished With Warnings", body: warning)
+                }
+            } else {
+                logger.success("Sync completed: \(filesProcessed) files updated, \(filesArchived) files archived")
+                await sendNotification(
+                    title: "Backup Complete",
+                    body: "Successfully synced \(filesProcessed) file(s), archived \(filesArchived) file(s)"
+                )
+            }
 
         } catch {
-            status = .failed(error.localizedDescription)
-            logger.error("Sync failed with unexpected error", details: error.localizedDescription)
-            config.recordSyncResult(success: false, error: error.localizedDescription)
+            let message = error.localizedDescription
+            status = .failed(message)
+            logger.error("Sync failed", details: message)
 
-            await sendNotification(
-                title: "Backup Failed",
-                body: error.localizedDescription
-            )
+            // Only alert when something new went wrong, so a persistent
+            // problem doesn't notify on every hourly retry.
+            let isNewProblem = config.lastSyncSuccess || config.lastSyncError != message
+            recordResult(paths, success: false, error: message)
+
+            if isNewProblem, !isCancelling {
+                await sendNotification(title: "Backup Failed", body: message)
+            }
         }
 
         // End logging session
         logger.endSession(success: success)
+        releaseLock()
+
+        // Run anything waiting for the sync to end (quit, update install),
+        // now that the log is written.
+        let waiting = runWhenIdle
+        runWhenIdle.removeAll()
+        waiting.forEach { $0() }
 
         if success {
             // Leave the completion state visible briefly, but keep failures visible
             // until the next manual or scheduled sync so the user can inspect them.
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            status = .idle
-            filesProcessed = 0
-            filesArchived = 0
-            currentFile = ""
+            if status == .completed {
+                status = .idle
+                filesProcessed = 0
+                filesArchived = 0
+                currentFile = ""
+            }
         }
 
         return success
     }
 
+    /// Stop a running sync (terminates rsync). Safe to call when idle.
+    func cancelRunningSync() {
+        guard status.isRunning else { return }
+        isCancelling = true
+        currentProcess?.terminate()
+    }
+
+    /// Run `block` now if idle, otherwise as soon as the current sync ends.
+    func whenIdle(_ block: @escaping () -> Void) {
+        if status.isRunning {
+            runWhenIdle.append(block)
+        } else {
+            block()
+        }
+    }
+
+    /// Record the outcome, unless the drives were changed while this sync
+    /// ran — its result says nothing about the newly chosen drives.
+    private func recordResult(_ paths: SyncPaths, success: Bool, error: String? = nil, warning: String? = nil) {
+        guard config.sourceDriveUUID == paths.sourceUUID,
+              config.backupDriveUUID == paths.backupUUID else {
+            logger.info("Drives were changed during this sync; not recording its result")
+            return
+        }
+        config.recordSyncResult(success: success, error: error, warning: warning)
+    }
+
+    private static func partialSummary(_ warnings: [String]) -> String {
+        let count = warnings.count
+        return "\(count) item\(count == 1 ? "" : "s") couldn't be copied. Everything else was backed up. See the log for details."
+    }
+
     // MARK: - Step 1: Validate Drives
 
-    private func validateDrives() async throws {
+    private func validateDrives(_ paths: SyncPaths) throws {
         logger.info("Validating drives...")
-
-        // Refresh drive status
-        driveMonitor.refreshMountedVolumes()
 
         // Check source drive
         let sourceResult = driveMonitor.validateSourceDrive()
         guard sourceResult.isValid else {
             throw SyncError.sourceValidationFailed(sourceResult.errorMessage)
         }
-        logger.info("Source drive validated: \(config.sourceDriveName)")
 
         // Check backup drive
         let backupResult = driveMonitor.validateBackupDrive()
         guard backupResult.isValid else {
             throw SyncError.backupValidationFailed(backupResult.errorMessage)
         }
-        logger.info("Backup drive validated: \(config.backupDriveName)")
 
-        // Double-check UUIDs as an extra safety measure
-        guard let sourceUUID = DriveMonitor.getVolumeUUID(at: config.sourceDrivePath),
-              sourceUUID == config.sourceDriveUUID else {
+        // Double-check UUIDs against the paths this sync will actually use
+        guard let sourceUUID = DriveMonitor.getVolumeUUID(at: paths.source),
+              sourceUUID == paths.sourceUUID else {
             throw SyncError.sourceValidationFailed("Source drive UUID mismatch - ABORTING for safety")
         }
 
-        guard let backupUUID = DriveMonitor.getVolumeUUID(at: config.backupDrivePath),
-              backupUUID == config.backupDriveUUID else {
+        guard let backupUUID = DriveMonitor.getVolumeUUID(at: paths.backupDrive),
+              backupUUID == paths.backupUUID else {
             throw SyncError.backupValidationFailed("Backup drive UUID mismatch - ABORTING for safety")
         }
 
@@ -217,119 +329,127 @@ final class SyncManager {
             throw SyncError.sourceValidationFailed("CRITICAL: Source and backup drives are the same! This is a misconfiguration. ABORTING.")
         }
 
-        guard config.sourceDrivePath != config.backupDrivePath else {
+        guard paths.source != paths.backupDrive else {
             throw SyncError.sourceValidationFailed("CRITICAL: Source and backup paths are identical! ABORTING.")
         }
 
+        // Actually list the source. A drive can be mounted yet unreadable
+        // (macOS privacy permission denied, failing disk); without this,
+        // every backed-up file would look deleted.
+        do {
+            _ = try fileManager.contentsOfDirectory(atPath: paths.source)
+        } catch {
+            throw SyncError.sourceValidationFailed(
+                "DadCloner can't read \(paths.sourceName). If macOS asked for permission to access it, allow it in System Settings > Privacy & Security > Files and Folders. (\(error.localizedDescription))"
+            )
+        }
+        logger.info("Source drive validated: \(paths.sourceName)")
+
         // Verify backup marker still exists
-        guard fileManager.fileExists(atPath: config.backupMarkerPath) else {
+        guard fileManager.fileExists(atPath: paths.marker) else {
             throw SyncError.backupValidationFailed("Backup marker file missing - refusing to sync to potentially wrong drive")
         }
+
+        // Create the destination folder if it was removed
+        if !fileManager.fileExists(atPath: paths.destination) {
+            guard config.ensureBackupDestinationFolder() else {
+                throw SyncError.backupValidationFailed("Could not create the \(SyncConfiguration.backupFolderName) folder")
+            }
+            logger.info("Recreated backup folder")
+        }
+        try fileManager.createDirectory(atPath: paths.archive, withIntermediateDirectories: true)
+        logger.info("Backup drive validated: \(paths.backupName)")
 
         logger.success("Drive validation complete")
     }
 
-    // MARK: - Step 2: Archive Deleted Files
+    // MARK: - Step 2: Dry Run
 
-    private func archiveDeletedFiles() async throws {
+    /// Items the dry run can't read are only logged here; the real run
+    /// reports them.
+    private func dryRun(_ paths: SyncPaths) async throws {
+        let rsyncPath = try bundledRsyncPath()
+        let args = RsyncCommand.dryRunArguments(
+            source: paths.source,
+            destination: paths.destination,
+            replacedDir: RsyncCommand.replacedFolder(archiveRoot: paths.archive, now: Date())
+        )
+        logger.info("Checking for changes: rsync \(args.joined(separator: " "))")
+
+        let result = try await runProcess(executable: rsyncPath, arguments: args, collectStdout: true)
+        try checkCancelled()
+
+        let outcome = RsyncOutcome(exitCode: result.exitCode)
+        if outcome == .failure {
+            throw SyncError.rsyncFailed("Dry run failed (exit \(result.exitCode)): \(result.stderr)")
+        }
+
+        let fileCount = RsyncOutput.fileCount(fromItemized: result.stdout)
+        logger.info("Dry run complete: \(fileCount) file(s) to copy")
+
+        if outcome == .partial {
+            logger.warning("Some items can't be read", details: RsyncOutput.errorLines(fromStderr: result.stderr).joined(separator: "\n"))
+        }
+        try validateAvailableSpace(forDryRunOutput: result.stdout, paths: paths)
+    }
+
+    // MARK: - Step 3: Archive Deleted Files
+
+    /// Returns a user-facing note if archiving was held for confirmation.
+    private func archiveDeletedFiles(_ paths: SyncPaths, confirmedMassArchiveCount: Int?) async throws -> String? {
         logger.info("Checking for files to archive...")
 
-        let sourcePath = config.sourceDrivePath
-        let backupPath = config.backupDestinationPath
-        let archivePath = config.archivePath
+        let source = paths.source
+        let destination = paths.destination
 
-        // Create today's archive folder with timestamp to avoid collisions
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-        let todayFolder = dateFormatter.string(from: Date())
-        let todayArchivePath = (archivePath as NSString).appendingPathComponent(todayFolder)
+        let scan = try await Task.detached(priority: .utility) {
+            try OrphanScanner().scan(backupPath: destination, sourcePath: source)
+        }.value
+        try checkCancelled()
 
-        // Get list of files in backup that don't exist in source
-        // These are files that were deleted from source and need to be archived
-        let orphanedFiles = try OrphanScanner().findOrphanedFiles(
-            backupPath: backupPath,
-            sourcePath: sourcePath
-        )
-
-        if orphanedFiles.isEmpty {
+        if scan.orphaned.isEmpty {
             logger.info("No orphaned files to archive")
-            return
+            return nil
         }
 
-        logger.info("Found \(orphanedFiles.count) file(s) to archive")
+        logger.info("Found \(scan.orphaned.count) of \(scan.scannedFileCount) backed-up file(s) missing from source")
 
-        // Create archive folder if needed
-        if !fileManager.fileExists(atPath: todayArchivePath) {
-            try fileManager.createDirectory(atPath: todayArchivePath, withIntermediateDirectories: true)
+        let orphanCount = scan.orphaned.count
+        let isConfirmed = confirmedMassArchiveCount.map { orphanCount <= $0 + max($0 / 10, 10) } ?? false
+        if BackupPolicy.isMassArchive(orphaned: orphanCount, scanned: scan.scannedFileCount), !isConfirmed {
+            pendingMassArchive = MassArchiveRequest(
+                orphanedCount: orphanCount,
+                scannedCount: scan.scannedFileCount
+            )
+            let sample = scan.orphaned.prefix(20).joined(separator: "\n")
+            logger.warning("Large archive needs confirmation; skipping archive step. First missing files:", details: sample)
+            return "\(orphanCount) of \(scan.scannedFileCount) backed-up files are no longer on \(paths.sourceName), so they were left in place (new and changed files were still backed up). If you deleted or reorganized them on purpose, click \u{201C}Archive & Back Up\u{201D} in the DadCloner menu (or Backup Now if it isn't shown). If not, check the source drive."
         }
 
-        // Track failures - we will abort sync if ANY file fails to archive
-        var failedFiles: [(path: String, error: String)] = []
+        let now = Date()
+        let dayFolder = ArchiveMover.dayFolder(archiveRoot: paths.archive, now: now)
+        let orphaned = scan.orphaned
+        let (result, cleanup) = await Task.detached(priority: .utility) {
+            let result = ArchiveMover().archive(
+                relativePaths: orphaned,
+                backupRoot: destination,
+                dayFolder: dayFolder,
+                now: now
+            )
+            let cleanup = OrphanScanner().removeEmptyOrphanedDirectories(
+                backupPath: destination,
+                sourcePath: source
+            )
+            return (result, cleanup)
+        }.value
 
-        // Move each orphaned file to archive
-        for relativePath in orphanedFiles {
-            let sourceFile = (backupPath as NSString).appendingPathComponent(relativePath)
-            var archiveFile = (todayArchivePath as NSString).appendingPathComponent(relativePath)
-
-            // Create parent directory in archive if needed
-            let archiveParent = (archiveFile as NSString).deletingLastPathComponent
-            if !fileManager.fileExists(atPath: archiveParent) {
-                do {
-                    try fileManager.createDirectory(atPath: archiveParent, withIntermediateDirectories: true)
-                } catch {
-                    failedFiles.append((relativePath, "Could not create archive directory: \(error.localizedDescription)"))
-                    continue
-                }
-            }
-
-            // Handle collision: if archive file already exists, add timestamp
-            if fileManager.fileExists(atPath: archiveFile) {
-                let timeFormatter = DateFormatter()
-                timeFormatter.dateFormat = "HHmmss"
-                let timestamp = timeFormatter.string(from: Date())
-
-                let fileName = (relativePath as NSString).lastPathComponent
-                let fileExt = (fileName as NSString).pathExtension
-                let baseName = (fileName as NSString).deletingPathExtension
-
-                let newFileName: String
-                if fileExt.isEmpty {
-                    newFileName = "\(baseName)_\(timestamp)"
-                } else {
-                    newFileName = "\(baseName)_\(timestamp).\(fileExt)"
-                }
-
-                let parentPath = (archiveFile as NSString).deletingLastPathComponent
-                archiveFile = (parentPath as NSString).appendingPathComponent(newFileName)
-                logger.info("Archive collision detected, using: \(newFileName)")
-            }
-
-            do {
-                // Move file to archive
-                try fileManager.moveItem(atPath: sourceFile, toPath: archiveFile)
-
-                // VERIFY the move succeeded
-                guard fileManager.fileExists(atPath: archiveFile) else {
-                    failedFiles.append((relativePath, "File move appeared to succeed but archive file does not exist"))
-                    continue
-                }
-
-                // Verify source was removed (move, not copy)
-                if fileManager.fileExists(atPath: sourceFile) {
-                    // This shouldn't happen, but if it does, we have a problem
-                    logger.warning("Move did not remove source file: \(relativePath)")
-                }
-
-                filesArchived += 1
-                currentFile = relativePath
-                logger.info("Archived: \(relativePath)")
-            } catch {
-                failedFiles.append((relativePath, error.localizedDescription))
-            }
+        filesArchived = result.archived.count
+        for path in result.archived {
+            logger.info("Archived: \(path)")
         }
-
-        let cleanup = OrphanScanner().removeEmptyOrphanedDirectories(
-            backupPath: backupPath, sourcePath: sourcePath)
+        for (path, newName) in result.renamed.sorted(by: { $0.key < $1.key }) {
+            logger.info("Archive collision for \(path), saved as \(newName)")
+        }
         for dir in cleanup.removed {
             logger.info("Removed empty deleted folder: \(dir)")
         }
@@ -340,100 +460,74 @@ final class SyncManager {
         // If ANY files failed to archive, ABORT the sync
         // This is critical - we don't want to run rsync if archiving failed
         // because that could lead to confusion about what was/wasn't archived
-        if !failedFiles.isEmpty {
-            logger.error("Failed to archive \(failedFiles.count) file(s):")
-            for (path, error) in failedFiles {
-                logger.error("  - \(path): \(error)")
+        if !result.failures.isEmpty {
+            logger.error("Failed to archive \(result.failures.count) file(s):")
+            for failure in result.failures {
+                logger.error("  - \(failure.relativePath): \(failure.reason)")
             }
-            throw SyncError.archiveFailed("Failed to archive \(failedFiles.count) file(s). Sync aborted to prevent data inconsistency. Check logs for details.")
+            throw SyncError.archiveFailed("Failed to archive \(result.failures.count) file(s). Sync aborted to prevent data inconsistency. Check logs for details.")
         }
 
         logger.success("Archived \(filesArchived) file(s)")
+        try checkCancelled()
+        return nil
     }
 
-    // MARK: - Step 3: Perform Rsync
+    // MARK: - Step 4: Perform Rsync
 
-    private func performRsync() async throws {
-        logger.info("Starting rsync...")
-
+    /// Returns per-file warnings when rsync finished but skipped some items.
+    private func performRsync(_ paths: SyncPaths) async throws -> [String] {
+        try checkCancelled()
         let rsyncPath = try bundledRsyncPath()
-        let sourcePath = config.sourceDrivePath.hasSuffix("/") ? config.sourceDrivePath : config.sourceDrivePath + "/"
-        let backupPath = config.backupDestinationPath.hasSuffix("/") ? config.backupDestinationPath : config.backupDestinationPath + "/"
+        let replacedDir = RsyncCommand.replacedFolder(archiveRoot: paths.archive, now: Date())
 
-        // Build rsync command with safety flags
-        // CRITICAL: We NEVER use --delete flag
-        let rsyncArgs = [
-            "-av",                      // Archive mode, verbose
-            "--itemize-changes",        // Show what's being changed
-            "--info=progress2",         // Emit overall progress for large transfers
-            "--exclude", SyncConfiguration.archiveDirectoryName,
-            "--exclude", SyncConfiguration.backupMarkerFilename,
-            "--exclude", ".DS_Store",
-            "--exclude", ".Spotlight-V100",
-            "--exclude", ".fseventsd",
-            "--exclude", ".Trashes",
-            "--exclude", ".TemporaryItems",
-            sourcePath,
-            backupPath
-        ]
+        // CRITICAL: We NEVER use --delete. Overwritten files go to replacedDir.
+        let args = RsyncCommand.arguments(
+            source: paths.source,
+            destination: paths.destination,
+            replacedDir: replacedDir
+        )
+        logger.info("Running: rsync \(args.joined(separator: " "))")
 
-        logger.info("Running: rsync \(rsyncArgs.joined(separator: " "))")
-
-        // First, do a dry run to count files and estimate transfer size.
-        let dryRunArgs = ["--dry-run", "--stats"] + rsyncArgs
-        let dryRunResult = try await runProcess(executable: rsyncPath, arguments: dryRunArgs)
-
-        if dryRunResult.exitCode != 0 {
-            throw SyncError.rsyncFailed("Dry run failed: \(dryRunResult.stderr)")
-        }
-
-        // Count files from dry run output
-        let fileCount = RsyncOutput.fileCount(fromItemized: dryRunResult.stdout)
-
-        logger.info("Dry run complete: \(fileCount) file(s) to sync")
-
-        if fileCount == 0 {
-            logger.info("No files need syncing")
-            currentProgress = 0.9
-            return
-        }
-
-        try validateAvailableSpace(forDryRunOutput: dryRunResult.stdout)
-
-        // Now do the actual sync
         filesProcessed = 0
         let result = try await runProcess(
             executable: rsyncPath,
-            arguments: rsyncArgs,
-            stdoutLineHandler: { [weak self] line in
-                guard let self = self else { return }
-                Task { @MainActor in
-                    self.handleRsyncOutputLine(line)
-                }
-            },
-            stderrLineHandler: { [weak self] line in
-                guard let self = self else { return }
-                Task { @MainActor in
-                    self.handleRsyncOutputLine(line)
+            arguments: args,
+            collectStdout: false,
+            lineHandler: { [weak self] lines in
+                for line in lines {
+                    self?.handleRsyncOutputLine(line)
                 }
             }
         )
+        try checkCancelled()
 
-        if result.exitCode != 0 && result.exitCode != 24 { // 24 = vanished files, usually OK
+        let warnings: [String]
+        switch RsyncOutcome(exitCode: result.exitCode) {
+        case .success:
+            warnings = []
+        case .partial:
+            warnings = RsyncOutput.errorLines(fromStderr: result.stderr)
+            logger.warning("rsync finished but some items were skipped (exit \(result.exitCode))", details: warnings.joined(separator: "\n"))
+        case .failure:
             throw SyncError.rsyncFailed("rsync failed with exit code \(result.exitCode): \(result.stderr)")
         }
 
+        if fileManager.fileExists(atPath: replacedDir) {
+            logger.info("Previous versions of changed files saved in \((replacedDir as NSString).lastPathComponent)")
+        }
         logger.success("rsync complete: \(filesProcessed) file(s) synced")
+        return warnings
     }
 
-    private func validateAvailableSpace(forDryRunOutput output: String) throws {
+    private func validateAvailableSpace(forDryRunOutput output: String, paths: SyncPaths) throws {
         guard let requiredBytes = RsyncOutput.transferredFileSize(fromStats: output),
               requiredBytes > 0 else {
-            logger.warning("Could not estimate transfer size from dry run; continuing")
+            logger.info("Nothing to transfer, or size unknown; skipping space check")
             return
         }
 
-        let availableBytes = try availableDiskSpace(atPath: config.backupDrivePath)
+        let availableBytes = try availableDiskSpace(atPath: paths.backupDrive)
         let safetyBuffer = max(requiredBytes / 10, 512 * 1024 * 1024)
         let neededBytes = requiredBytes + safetyBuffer
 
@@ -443,7 +537,7 @@ final class SyncManager {
 
         guard availableBytes >= neededBytes else {
             throw SyncError.insufficientSpace(
-                "Need about \(formatBytes(neededBytes)) free, but only \(formatBytes(availableBytes)) is available on \(config.backupDriveName)."
+                "Need about \(formatBytes(neededBytes)) free, but only \(formatBytes(availableBytes)) is available on \(paths.backupName)."
             )
         }
     }
@@ -460,22 +554,28 @@ final class SyncManager {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
-    // MARK: - Step 4: Verify
+    // MARK: - Step 5: Final Checks
 
-    private func verifySync() async throws {
-        logger.info("Verifying sync...")
+    /// Confirms the backup's own bookkeeping survived the run. (rsync
+    /// verifies each file it copies; this is not a content check.)
+    private func verifySync(_ paths: SyncPaths) throws {
+        logger.info("Running final checks...")
 
-        // Verify backup marker still exists
-        guard fileManager.fileExists(atPath: config.backupMarkerPath) else {
+        guard fileManager.fileExists(atPath: paths.marker) else {
             throw SyncError.verificationFailed("Backup marker file was deleted during sync!")
         }
 
-        // Verify archive directory exists
-        guard fileManager.fileExists(atPath: config.archivePath) else {
+        guard fileManager.fileExists(atPath: paths.archive) else {
             throw SyncError.verificationFailed("Archive directory missing")
         }
 
-        logger.success("Verification complete")
+        logger.success("Final checks complete")
+    }
+
+    private func checkCancelled() throws {
+        if isCancelling {
+            throw SyncError.cancelled
+        }
     }
 
     // MARK: - Process Execution
@@ -483,8 +583,8 @@ final class SyncManager {
     private func runProcess(
         executable: String,
         arguments: [String],
-        stdoutLineHandler: ((String) -> Void)? = nil,
-        stderrLineHandler: ((String) -> Void)? = nil
+        collectStdout: Bool,
+        lineHandler: (@MainActor ([String]) -> Void)? = nil
     ) async throws -> (exitCode: Int32, stdout: String, stderr: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -495,30 +595,24 @@ final class SyncManager {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
-        let outputCollector = ProcessOutputCollector()
+        let collector = ProcessOutputCollector(collectStdout: collectStdout, lineHandler: lineHandler)
 
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            outputCollector.appendStdout(data, handler: stdoutLineHandler)
+            collector.appendStdout(handle.availableData)
+        }
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            collector.appendStderr(handle.availableData)
         }
 
-        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            outputCollector.appendStderr(data, handler: stderrLineHandler)
-        }
+        currentProcess = process
+        defer { currentProcess = nil }
 
         return try await withCheckedThrowingContinuation { continuation in
-            process.terminationHandler = { _ in
+            process.terminationHandler = { process in
                 stdoutPipe.fileHandleForReading.readabilityHandler = nil
                 stderrPipe.fileHandleForReading.readabilityHandler = nil
 
-                let output = outputCollector.finish(
-                    stdoutPipe: stdoutPipe,
-                    stderrPipe: stderrPipe,
-                    stdoutLineHandler: stdoutLineHandler,
-                    stderrLineHandler: stderrLineHandler
-                )
-
+                let output = collector.finish(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe)
                 continuation.resume(returning: (process.terminationStatus, output.stdout, output.stderr))
             }
 
@@ -527,12 +621,10 @@ final class SyncManager {
             } catch {
                 process.terminationHandler = nil
                 continuation.resume(throwing: error)
-                return
             }
         }
     }
 
-    @MainActor
     private func handleRsyncOutputLine(_ line: String) {
         if let percent = RsyncOutput.progressPercent(from: line) {
             let start = 0.3
@@ -574,7 +666,8 @@ final class SyncManager {
             lockFileHandle = handle
             // Write PID to lock file
             let pid = ProcessInfo.processInfo.processIdentifier
-            handle.write("\(pid)".data(using: .utf8)!)
+            handle.truncateFile(atOffset: 0)
+            handle.write(Data("\(pid)".utf8))
             return true
         }
 
@@ -582,12 +675,13 @@ final class SyncManager {
         return false
     }
 
+    /// Unlock but leave the file in place: deleting it would let another
+    /// process lock a fresh file while someone still holds the old one.
     private func releaseLock() {
         guard let handle = lockFileHandle else { return }
         flock(handle.fileDescriptor, LOCK_UN)
         try? handle.close()
         lockFileHandle = nil
-        try? fileManager.removeItem(atPath: lockFilePath)
     }
 
     // MARK: - Notifications
@@ -623,97 +717,63 @@ extension Notification.Name {
     static let dadClonerSyncStatusDidChange = Notification.Name("dadClonerSyncStatusDidChange")
 }
 
-private final class ProcessOutputCollector {
-    private let queue = DispatchQueue(label: "com.dadcloner.process.io")
+/// Collects a child process's output from pipe callbacks (any thread).
+/// Lines are split on raw bytes, so multibyte characters split across reads
+/// survive, and delivered to the main actor in batches.
+private final class ProcessOutputCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private let collectStdout: Bool
+    private let lineHandler: (@MainActor ([String]) -> Void)?
     private var stdoutData = Data()
     private var stderrData = Data()
-    private var stdoutBuffer = ""
-    private var stderrBuffer = ""
+    private var stdoutSplitter = LineSplitter()
+    private var stderrSplitter = LineSplitter()
 
-    func appendStdout(_ data: Data, handler: ((String) -> Void)?) {
-        guard !data.isEmpty else { return }
-        queue.sync {
-            stdoutData.append(data)
-            if let chunk = String(data: data, encoding: .utf8) {
-                stdoutBuffer += chunk
-                drainStdoutBuffer(final: false, handler: handler)
-            }
-        }
+    init(collectStdout: Bool, lineHandler: (@MainActor ([String]) -> Void)?) {
+        self.collectStdout = collectStdout
+        self.lineHandler = lineHandler
     }
 
-    func appendStderr(_ data: Data, handler: ((String) -> Void)?) {
+    func appendStdout(_ data: Data) {
         guard !data.isEmpty else { return }
-        queue.sync {
+        let lines: [String] = lock.withLock {
+            if collectStdout { stdoutData.append(data) }
+            return lineHandler == nil ? [] : stdoutSplitter.append(data)
+        }
+        emit(lines)
+    }
+
+    func appendStderr(_ data: Data) {
+        guard !data.isEmpty else { return }
+        let lines: [String] = lock.withLock {
             stderrData.append(data)
-            if let chunk = String(data: data, encoding: .utf8) {
-                stderrBuffer += chunk
-                drainStderrBuffer(final: false, handler: handler)
-            }
+            return lineHandler == nil ? [] : stderrSplitter.append(data)
         }
+        emit(lines)
     }
 
-    func finish(
-        stdoutPipe: Pipe,
-        stderrPipe: Pipe,
-        stdoutLineHandler: ((String) -> Void)?,
-        stderrLineHandler: ((String) -> Void)?
-    ) -> (stdout: String, stderr: String) {
-        queue.sync {
-            let remainingStdout = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-            let remainingStderr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+    func finish(stdoutPipe: Pipe, stderrPipe: Pipe) -> (stdout: String, stderr: String) {
+        appendStdout(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
+        appendStderr(stderrPipe.fileHandleForReading.readDataToEndOfFile())
 
-            stdoutData.append(remainingStdout)
-            stderrData.append(remainingStderr)
-
-            if let chunk = String(data: remainingStdout, encoding: .utf8) {
-                stdoutBuffer += chunk
-            }
-            if let chunk = String(data: remainingStderr, encoding: .utf8) {
-                stderrBuffer += chunk
-            }
-
-            drainStdoutBuffer(final: true, handler: stdoutLineHandler)
-            drainStderrBuffer(final: true, handler: stderrLineHandler)
-
+        let (lines, stdout, stderr): ([String], String, String) = lock.withLock {
+            let lines = lineHandler == nil ? [] : stdoutSplitter.finish() + stderrSplitter.finish()
             return (
-                stdout: String(data: stdoutData, encoding: .utf8) ?? "",
-                stderr: String(data: stderrData, encoding: .utf8) ?? ""
+                lines,
+                String(decoding: stdoutData, as: UTF8.self),
+                String(decoding: stderrData, as: UTF8.self)
             )
         }
+        emit(lines)
+        return (stdout, stderr)
     }
 
-    private func drainStdoutBuffer(final: Bool, handler: ((String) -> Void)?) {
-        while let range = stdoutBuffer.range(of: "\n") {
-            let line = String(stdoutBuffer[..<range.lowerBound])
-            stdoutBuffer.removeSubrange(..<range.upperBound)
-            emit(line, handler: handler)
-        }
-
-        if final && !stdoutBuffer.isEmpty {
-            let line = stdoutBuffer
-            stdoutBuffer = ""
-            emit(line, handler: handler)
-        }
-    }
-
-    private func drainStderrBuffer(final: Bool, handler: ((String) -> Void)?) {
-        while let range = stderrBuffer.range(of: "\n") {
-            let line = String(stderrBuffer[..<range.lowerBound])
-            stderrBuffer.removeSubrange(..<range.upperBound)
-            emit(line, handler: handler)
-        }
-
-        if final && !stderrBuffer.isEmpty {
-            let line = stderrBuffer
-            stderrBuffer = ""
-            emit(line, handler: handler)
-        }
-    }
-
-    private func emit(_ line: String, handler: ((String) -> Void)?) {
-        guard let handler else { return }
+    private func emit(_ lines: [String]) {
+        guard let lineHandler, !lines.isEmpty else { return }
         DispatchQueue.main.async {
-            handler(line)
+            MainActor.assumeIsolated {
+                lineHandler(lines)
+            }
         }
     }
 }
@@ -728,6 +788,7 @@ enum SyncError: LocalizedError {
     case verificationFailed(String)
     case insufficientSpace(String)
     case lockFailed
+    case cancelled
 
     var errorDescription: String? {
         switch self {
@@ -745,6 +806,8 @@ enum SyncError: LocalizedError {
             return "Backup drive is low on space: \(message)"
         case .lockFailed:
             return "Could not acquire sync lock"
+        case .cancelled:
+            return "Backup was stopped before it finished"
         }
     }
 }

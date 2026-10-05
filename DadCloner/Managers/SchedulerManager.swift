@@ -9,6 +9,10 @@ import DadClonerCore
 /// time has passed, rather than a one-shot timer aimed at the exact moment.
 /// A timer can't wake a sleeping Mac, so the tick plus a wake observer means
 /// a backup missed during sleep starts as soon as the Mac wakes.
+///
+/// If the drives aren't connected at the scheduled time, the run is
+/// deferred (no failure, no alert) and starts once they're plugged in.
+@MainActor
 @Observable
 final class SchedulerManager {
 
@@ -19,11 +23,14 @@ final class SchedulerManager {
     private(set) var isScheduleEnabled: Bool = true
     private(set) var nextScheduledSync: Date?
 
-    private var tickTimer: Timer?
-    private var wakeObserver: NSObjectProtocol?
-    private let config = SyncConfiguration.shared
-    private let syncManager = SyncManager.shared
-    private let logger = SyncLogger.shared
+    /// A scheduled run came due while the drives were disconnected.
+    @ObservationIgnored private var deferredScheduledSync = false
+
+    @ObservationIgnored private var tickTimer: Timer?
+    @ObservationIgnored private var wakeObserver: NSObjectProtocol?
+    @ObservationIgnored private let config = SyncConfiguration.shared
+    @ObservationIgnored private let syncManager = SyncManager.shared
+    @ObservationIgnored private let logger = SyncLogger.shared
 
     // MARK: - Initialization
     private init() {
@@ -64,6 +71,7 @@ final class SchedulerManager {
         }
         isScheduleEnabled = false
         nextScheduledSync = nil
+        deferredScheduledSync = false
         logger.info("Scheduler stopped")
     }
 
@@ -91,7 +99,9 @@ final class SchedulerManager {
         tickTimer?.invalidate()
 
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
-            self?.tick()
+            MainActor.assumeIsolated {
+                self?.tick()
+            }
         }
         timer.tolerance = 10
         // .common so the timer keeps firing while the menu bar popover is open
@@ -106,8 +116,10 @@ final class SchedulerManager {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.logger.info("Mac woke from sleep - checking backup schedule")
-            self?.tick()
+            MainActor.assumeIsolated {
+                self?.logger.info("Mac woke from sleep - checking backup schedule")
+                self?.tick()
+            }
         }
     }
 
@@ -121,6 +133,8 @@ final class SchedulerManager {
 
         if Date() >= next {
             performScheduledSync()
+        } else if deferredScheduledSync {
+            runDeferredSyncIfReady()
         } else {
             runCatchUpIfNeeded(reason: "overdue backup")
         }
@@ -151,9 +165,22 @@ final class SchedulerManager {
         nextScheduledSync = nextOccurrence(after: Date())
 
         guard !syncManager.status.isRunning else { return }
+
+        // Defer only when a drive is simply unplugged. Any other problem
+        // (wrong drive, missing marker, read-only) runs the sync so it fails
+        // with a clear reason and a notification.
+        let drives = DriveMonitor.shared
+        drives.refreshMountedVolumes()
+        guard drives.sourceStatus != .notMounted, drives.backupStatus != .notMounted else {
+            deferredScheduledSync = true
+            logger.info("Scheduled backup deferred - drives not ready (\(DriveMonitor.shared.statusMessage)). It will run when they are.")
+            return
+        }
+
+        deferredScheduledSync = false
         logger.info("Starting scheduled sync...")
 
-        Task { @MainActor in
+        Task {
             let success = await syncManager.performSync()
 
             if success {
@@ -161,6 +188,19 @@ final class SchedulerManager {
             } else {
                 logger.error("Scheduled sync failed")
             }
+        }
+    }
+
+    /// Start a deferred scheduled sync once both drives are back.
+    private func runDeferredSyncIfReady() {
+        guard !syncManager.status.isRunning else { return }
+        DriveMonitor.shared.refreshMountedVolumes()
+        guard DriveMonitor.shared.areDrivesReady else { return }
+
+        deferredScheduledSync = false
+        logger.info("Drives are back; running the deferred scheduled sync")
+        Task {
+            _ = await syncManager.performSync()
         }
     }
 
@@ -174,7 +214,7 @@ final class SchedulerManager {
         guard config.shouldAttemptCatchUpSync, DriveMonitor.shared.areDrivesReady else { return }
 
         logger.info("Backup is overdue and drives are ready; starting catch-up sync (\(reason))")
-        Task { @MainActor in
+        Task {
             _ = await syncManager.performSync()
         }
     }
@@ -182,10 +222,17 @@ final class SchedulerManager {
     // MARK: - Manual Sync
 
     /// Trigger a manual sync
-    @MainActor
-    func triggerManualSync() async -> Bool {
-        logger.info("Manual sync triggered")
-        return await syncManager.performSync()
+    func triggerManualSync(confirmedMassArchiveCount: Int? = nil) async -> Bool {
+        if let count = confirmedMassArchiveCount {
+            logger.info("Manual sync triggered (archiving \(count) files confirmed)")
+        } else {
+            logger.info("Manual sync triggered")
+        }
+        let success = await syncManager.performSync(confirmedMassArchiveCount: confirmedMassArchiveCount)
+        if success {
+            deferredScheduledSync = false
+        }
+        return success
     }
 
     // MARK: - Status
